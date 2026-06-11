@@ -443,4 +443,27 @@ onUnmounted(() => {
     box-shadow: 0 0 10px rgba(255, 59, 48, 0.5);
     /* 红 */
 }
+
+/* 当背景透明度为 0 时，强制文本变为黑色 */
+.island-container[style*="background-color: rgba(0, 0, 0, 0)"] {
+    /* 使用 CSS 变量覆盖默认的白色文本颜色 */
+    --text-primary: #000000;
+    --text-secondary: #333333;
+}
+
+/* 确保所有文本子元素都继承这些颜色 */
+.island-container[style*="background-color: rgba(0, 0, 0, 0)"] .speed-item,
+.island-container[style*="background-color: rgba(0, 0, 0, 0)"] .label,
+.island-container[style*="background-color: rgba(0, 0, 0, 0)"] .value,
+.island-container[style*="background-color: rgba(0, 0, 0, 0)"] .status-dot {
+    color: var(--text-primary) !important;
+    fill: var(--text-primary) !important;
+    /* 兼容 SVG 图标颜色 */
+}
+
+/* 针对高流量状态下的 label，确保背景也变为黑色系以保持对比度 */
+.island-container[style*="background-color: rgba(0, 0, 0, 0)"] .label.high-traffic {
+    background: rgba(0, 0, 0, 0.1) !important;
+    color: var(--text-primary) !important;
+}
 </style>

@@ -27,14 +27,26 @@
                 <h3>当前实时状态</h3>
                 <div class="speed-monitor">
                     <div class="speed-item">
-                        <span class="arrow up">↑</span>
+                        <span class="arrow up">
+                            <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path
+                                    d="M16 4C16.8 4 17.5 4.3 18.1 4.9L28.1 14.9C29.3 16.1 29.3 18 28.1 19.1C26.9 20.3 25 20.3 23.9 19.1L18 13.2V26C18 27.7 16.7 29 15 29C13.3 29 12 27.7 12 26V13.2L6.1 19.1C4.9 20.3 3 20.3 1.9 19.1C0.7 18 0.7 16.1 1.9 14.9L11.9 4.9C12.5 4.3 13.2 4 14 4H16Z"
+                                    fill="currentColor" />
+                            </svg>
+                        </span>
                         <div class="speed-info">
                             <span class="label">上传速度</span>
                             <span class="value">{{ uploadSpeed }}</span>
                         </div>
                     </div>
                     <div class="speed-item">
-                        <span class="arrow down">↓</span>
+                        <span class="arrow down">
+                            <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path
+                                    d="M16 28C15.2 28 14.5 27.7 13.9 27.1L3.9 17.1C2.7 15.9 2.7 14 3.9 12.9C5.1 11.7 7 11.7 8.1 12.9L14 18.8V6C14 4.3 15.3 3 17 3C18.7 3 20 4.3 20 6V18.8L25.9 12.9C27.1 11.7 29 11.7 30.1 12.9C31.3 14 31.3 15.9 30.1 17.1L20.1 27.1C19.5 27.7 18.8 28 18 28H16Z"
+                                    fill="currentColor" />
+                            </svg>
+                        </span>
                         <div class="speed-info">
                             <span class="label">下载速度</span>
                             <span class="value">{{ downloadSpeed }}</span>
@@ -70,8 +82,25 @@
 
         <footer class="panel-footer">
             <span>&copy; 2026 Ryen. All rights reserved.</span>
-            <span class="action-link">检查更新</span>
+            <span class="action-link" @click="checkUpdate">检查更新</span>
         </footer>
+
+        <Transition name="fade">
+            <div v-if="dialog.visible" class="modal-overlay" @click.self="closeDialog">
+                <div class="modal-card">
+                    <div class="modal-header">
+                        <h4>{{ dialog.title }}</h4>
+                    </div>
+                    <div class="modal-body">
+                        <p>{{ dialog.message }}</p>
+                    </div>
+                    <div class="modal-footer">
+                        <button v-if="dialog.isConfirm" class="btn btn-secondary" @click="closeDialog">取消</button>
+                        <button class="btn btn-primary" @click="handleDialogConfirm">确定</button>
+                    </div>
+                </div>
+            </div>
+        </Transition>
     </div>
 </template>
 
@@ -79,68 +108,72 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
+import { getVersion } from '@tauri-apps/api/app';
 
-// 【核心改动】直接从全局 window 中获取 echarts 对象，规避 TS 编译报错
 const echarts = (window as any).echarts;
 
 const isWidgetVisible = ref(false);
 const autoStart = ref(false);
 const opacity = ref(Number(localStorage.getItem('nsd_island_opacity') || '100'));
 
-// 实时速度文本
 const uploadSpeed = ref('0 B/s');
 const downloadSpeed = ref('0 B/s');
 
-// 照抄灵动岛的数据计算变量
+// 统一的弹窗状态控制
+const dialog = ref({
+    visible: false,
+    title: 'NetSpeed Dynamic',
+    message: '',
+    isConfirm: false,
+    callback: null as (() => void) | null
+});
+
+const showDialog = (title: string, message: string, isConfirm = false, onConfirm: (() => void) | null = null) => {
+    dialog.value = { visible: true, title, message, isConfirm, callback: onConfirm };
+};
+
+const closeDialog = () => {
+    dialog.value.visible = false;
+};
+
+const handleDialogConfirm = () => {
+    if (dialog.value.callback) dialog.value.callback();
+    closeDialog();
+};
+
+const parseVersion = (v: string) => {
+    return v.replace(/^v/i, '').split('.').map(Number);
+};
+
 let lastRx = 0;
 let lastTx = 0;
 let speedTimer: number;
 
-// ECharts 实例及队列
 const chartRef = ref<HTMLElement | null>(null);
 let chartInstance: any = null;
-const chartDataQueue: number[] = Array(15).fill(0); // 预留15个初始0点，让图表顺滑滚动
+const chartDataQueue: number[] = Array(15).fill(0);
 
-// 格式化速度显示
 const formatSpeed = (bytes: number) => {
     if (bytes < 1024) return bytes + ' B/s';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB/s';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB/s';
 };
 
-// 初始化 ECharts 折线图
 const initChart = () => {
     if (!chartRef.value || !echarts) return;
     chartInstance = echarts.init(chartRef.value);
 
     const option = {
-        grid: {
-            top: 5,
-            bottom: 5,
-            left: 0,
-            right: 0,
-        },
-        xAxis: {
-            type: 'category',
-            boundaryGap: false,
-            show: false,
-        },
-        yAxis: {
-            type: 'value',
-            show: false,
-            min: 0,
-        },
+        grid: { top: 5, bottom: 5, left: 0, right: 0 },
+        xAxis: { type: 'category', boundaryGap: false, show: false },
+        yAxis: { type: 'value', show: false, min: 0 },
         series: [
             {
                 data: chartDataQueue,
                 type: 'line',
-                smooth: true,          // 平滑折线
-                symbol: 'none',        // 隐藏圆点
-                lineStyle: {
-                    color: '#3b82f6',  // 科技蓝主色
-                    width: 2,
-                },
-                // 渐变面积覆盖
+                smooth: true,
+                symbol: 'none',
+                lineStyle: { color: '#3b82f6', width: 2 },
                 areaStyle: {
                     color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
                         { offset: 0, color: 'rgba(59, 130, 246, 0.4)' },
@@ -150,35 +183,23 @@ const initChart = () => {
             },
         ],
     };
-
     chartInstance.setOption(option);
 };
 
-// 照抄灵动岛的流量获取与计算原理
 const fetchSpeedStats = async () => {
     try {
         const [currentRx, currentTx] = await invoke<[number, number]>('get_network_stats');
         if (lastRx !== 0) {
             const rxDiff = currentRx - lastRx;
             const txDiff = currentTx - lastTx;
-
-            // 1. 更新文字显示
             downloadSpeed.value = formatSpeed(rxDiff);
             uploadSpeed.value = formatSpeed(txDiff);
-
-            // 2. 计算下行流量，换算为纯数字 MB/s
             const speedMB = rxDiff / (1024 * 1024);
 
-            // 3. 更新图表队列数据
             chartDataQueue.push(Number(speedMB.toFixed(2)));
-            if (chartDataQueue.length > 15) {
-                chartDataQueue.shift();
-            }
+            if (chartDataQueue.length > 15) chartDataQueue.shift();
 
-            // 4. 推动图表刷新
-            chartInstance?.setOption({
-                series: [{ data: chartDataQueue }]
-            });
+            chartInstance?.setOption({ series: [{ data: chartDataQueue }] });
         }
         lastRx = currentRx;
         lastTx = currentTx;
@@ -187,24 +208,72 @@ const fetchSpeedStats = async () => {
     }
 };
 
-// 监听滑块变化
+// 【已升级】完美适配自定义 UI 的版本检测逻辑
+const checkUpdate = async () => {
+    try {
+        const localVersionStr = await getVersion();
+        const response = await fetch('https://api.github.com/repos/GEORGEWWWU/NetSpeed-Dynamic/releases/latest', {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/vnd.github.v3+json',
+                'User-Agent': 'Tauri-App-NetSpeed-Dynamic'
+            }
+        });
+
+        if (response.status === 404) {
+            showDialog('检查更新', '未找到可用发行版');
+            return;
+        }
+
+        if (!response.ok) {
+            showDialog('检查更新', '检查更新失败，请稍后再试');
+            return;
+        }
+
+        const data = await response.json();
+        const remoteVersionStr = data.tag_name;
+        const local = parseVersion(localVersionStr);
+        const remote = parseVersion(remoteVersionStr);
+
+        let hasNewVersion = false;
+        for (let i = 0; i < 3; i++) {
+            const rNum = remote[i] || 0;
+            const lNum = local[i] || 0;
+            if (rNum > lNum) {
+                hasNewVersion = true;
+                break;
+            } else if (rNum < lNum) {
+                break;
+            }
+        }
+
+        if (hasNewVersion) {
+            showDialog(
+                '发现新版本',
+                `发现新版本 ${remoteVersionStr}！当前版本为 v${localVersionStr}。是否前往 GitHub 下载更新？`,
+                true,
+                () => { window.open(data.html_url, '_blank'); }
+            );
+        } else {
+            showDialog('提示', '当前已是最新版本！');
+        }
+    } catch (error) {
+        console.error('检查更新时出错:', error);
+        showDialog('网络错误', '请求失败，请检查您的网络连接');
+    }
+};
+
 watch(opacity, async (newVal) => {
     localStorage.setItem('nsd_island_opacity', newVal.toString());
     await emit('control-island-opacity', { opacity: newVal });
 });
 
 onMounted(async () => {
-    // 初始化图表
     initChart();
-
-    // 开启流量计算定时器（1秒同步一次）
     fetchSpeedStats();
     speedTimer = setInterval(fetchSpeedStats, 1000) as unknown as number;
-
-    // 窗口缩放自适应尺寸
     window.addEventListener('resize', () => chartInstance?.resize());
 
-    // 监听来自灵动岛的自发性隐藏通知
     await listen<{ visible: boolean }>('island-status-sync', (event) => {
         isWidgetVisible.value = event.payload.visible;
     });
@@ -368,6 +437,11 @@ const toggleWidget = async () => {
     justify-content: center;
     font-weight: 800;
     font-size: 16px;
+}
+
+.arrow svg {
+    width: 20px;
+    height: 20px;
 }
 
 .arrow.up {
@@ -549,13 +623,109 @@ input:disabled+.slider {
 }
 
 .action-link {
-    color: #2b2b2b;
+    color: #2b2b2b89;
     cursor: pointer;
     transition: color 0.2s;
 }
 
 .action-link:hover {
-    color: #2b2b2b;
+    color: #2b2b2b89;
     text-decoration: underline;
+}
+
+/* 自定义弹窗核心样式 */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(15, 23, 42, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+}
+
+.modal-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 20px;
+    width: 360px;
+    padding: 24px;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+.modal-header h4 {
+    margin: 0 0 12px 0;
+    font-size: 16px;
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.modal-body p {
+    margin: 0 0 24px 0;
+    font-size: 14px;
+    color: #64748b;
+    line-height: 1.5;
+}
+
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+}
+
+/* 按钮组样式，呼应你的页面 input:checked 的纯黑科技风 */
+.btn {
+    padding: 8px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    outline: none;
+}
+
+.btn-secondary {
+    background: #f1f5f9;
+    color: #64748b;
+    border: 1px solid #e2e8f0;
+}
+
+.btn-secondary:hover {
+    background: #e2e8f0;
+    color: #334155;
+}
+
+.btn-primary {
+    background: #2b2b2b;
+    /* 对应你代码中开关按钮的黑色 */
+    color: #ffffff;
+    border: 1px solid #2b2b2b;
+}
+
+.btn-primary:hover {
+    background: #1a1a1a;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* 弹窗渐变动效 */
+.fade-enter-active,
+.fade-leave-active {
+    transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+    opacity: 0;
+}
+
+.fade-enter-from .modal-card {
+    transform: scale(0.95);
+}
+
+.fade-leave-to .modal-card {
+    transform: scale(0.95);
 }
 </style>

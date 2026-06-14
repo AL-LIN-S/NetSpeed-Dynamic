@@ -30,7 +30,12 @@
         <div class="main-content" :class="{ 'game-mode-layout': isGameMode }">
             <template v-if="!isGameMode">
                 <div class="card status-card">
-                    <h3>当前实时状态</h3>
+                    <div class="card-header-row">
+                        <h3>当前实时状态</h3>
+                        <button class="stats-toggle-btn" @click="toggleRightPanel">
+                            {{ rightPanel === 'settings' ? '数据统计' : '退出' }}
+                        </button>
+                    </div>
                     <div class="speed-monitor">
                         <div class="speed-item">
                             <span class="arrow up">
@@ -62,7 +67,7 @@
                     <div ref="chartRef" class="mini-chart"></div>
                 </div>
 
-                <div class="card settings-card">
+                <div class="card settings-card" v-if="rightPanel === 'settings'">
                     <h3>常规设置</h3>
 
                     <div class="setting-item flex-row-item">
@@ -96,6 +101,35 @@
                         <input type="range" min="0" max="100" v-model="opacity" class="range-input" />
                     </div>
                 </div>
+
+                <template v-else>
+                    <div class="card stats-card">
+                        <div class="card-header-row">
+                            <h3>数据统计</h3>
+                            <select v-model="statChartType" class="theme-select" @change="updateStatsChart">
+                                <option value="bar">柱状图</option>
+                                <option value="line">折线图</option>
+                            </select>
+                        </div>
+
+                        <div class="stats-overview">
+                            <div class="stat-box">
+                                <span class="stat-label">总上传</span>
+                                <span class="stat-val">{{ formatBytes(totalUpload) }}</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-label">总下载</span>
+                                <span class="stat-val">{{ formatBytes(totalDownload) }}</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-label">本月流量</span>
+                                <span class="stat-val">{{ formatBytes(monthTraffic) }}</span>
+                            </div>
+                        </div>
+
+                        <div ref="statsChartRef" class="stats-chart-container"></div>
+                    </div>
+                </template>
             </template>
 
             <template v-else>
@@ -122,7 +156,11 @@
 
         <footer class="panel-footer">
             <span>&copy; 2026 Ryen. All rights reserved.</span>
-            <span class="action-link" @click="checkUpdate">检查更新</span>
+            <span class="action-link"
+                :style="{ opacity: isChecking ? 0.5 : 1, pointerEvents: isChecking ? 'none' : 'auto' }"
+                @click="checkUpdate">
+                {{ isChecking ? '检查中...' : '检查更新' }}
+            </span>
         </footer>
 
         <Transition name="fade">
@@ -145,7 +183,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import { getVersion } from '@tauri-apps/api/app';
@@ -166,6 +204,9 @@ const appVersion = ref('1.0.0');
 
 const isGameMode = ref(false);
 
+const isChecking = ref(false);
+
+
 interface GameServer {
     id: string;
     name: string;
@@ -174,7 +215,7 @@ interface GameServer {
     ping: number | null;
 }
 
-// 收集的各大热门竞技游戏公开测试/核心骨干网服务器 IP
+// 游戏服务器列表
 const gameServers = ref<GameServer[]>([
     { id: 'valorant', name: '无畏契约', region: '国服 (腾讯广东节点)', ip: '43.198.0.1', ping: null },
     { id: 'csgo', name: '反恐精英 2 (CSGO)', region: '国服 (完美世界北京)', ip: '124.243.200.1', ping: null },
@@ -188,63 +229,188 @@ const gameServers = ref<GameServer[]>([
 const toggleGameMode = () => {
     isGameMode.value = !isGameMode.value;
     if (isGameMode.value) {
-        runAllPings(); // 切换进入游戏模式时，默认自动触发单次测试
+        runAllPings();
     } else {
-        // 退出时重置延迟数据
         gameServers.value.forEach(server => server.ping = null);
     }
 };
 
-// 测试所有ip
+// 运行所有游戏服务器的 Ping 测试
 const runAllPings = async () => {
-    // 异步并行测试所有服务器延迟
     await Promise.all(gameServers.value.map(async (server) => {
         try {
-            // 调用后端的命令执行原生底层 Ping
             const result = await invoke<number>('ping_game_host', { host: server.ip });
             server.ping = result;
         } catch (error) {
-            // 修改这里：明确设置为 -1 表示超时/错误
             server.ping = -1;
         }
     }));
 };
 
-// 状态色彩分级
 const getPingClass = (ping: number | null) => {
     if (ping === null) return 'ping-loading';
     if (ping === -1) return 'ping-error';
-    if (ping <= 35) return 'ping-excel'; // 极佳（绿色）
-    if (ping <= 70) return 'ping-good';  // 良好（黄色）
-    return 'ping-bad';                   // 较差（红色）
+    if (ping <= 35) return 'ping-excel';
+    if (ping <= 70) return 'ping-good';
+    return 'ping-bad';
 };
 
+// 切换游戏模式时，更新图表
 watch(isGameMode, async (newVal) => {
     if (!newVal) {
-        // 当从游戏模式切回常规模式时
-        // 1. 先确保老的实例被销毁（防止内存泄漏）
+        // 销毁所有旧实例，防止内存泄漏或节点挂载错位
         chartInstance?.dispose();
+        statsChartInstance?.dispose();
 
-        // 2. 等待 Vue 把新的 chartRef 节点渲染到页面上
+        // 等待 Vue 将 DOM 节点重新渲染出来
         await nextTick();
 
-        // 3. 重新绑定并初始化图表
+        // 重新初始化网速波形图
         initChart();
+
+        // 如果用户切走前打开的是数据统计面板，则同步重新初始化统计图表
+        if (rightPanel.value === 'stats') {
+            initStatsChart();
+        }
     }
 });
 
-// 切换开机自启动
+const rightPanel = ref<'settings' | 'stats'>('settings');
+const statChartType = ref<'bar' | 'line'>('bar');
+const statsChartRef = ref<HTMLElement | null>(null);
+let statsChartInstance: any = null;
+
+const trafficData = ref<Record<string, { up: number; down: number }>>({});
+let saveThrottleCounter = 0;
+
+// 格式化字节数为人类可读格式
+const formatBytes = (bytes: number) => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+};
+
+const totalUpload = computed(() => Object.values(trafficData.value).reduce((acc, curr) => acc + curr.up, 0));
+const totalDownload = computed(() => Object.values(trafficData.value).reduce((acc, curr) => acc + curr.down, 0));
+const monthTraffic = computed(() => {
+    const currentMonth = getLocalYYYYMMDD(new Date()).slice(0, 7);
+    return Object.entries(trafficData.value)
+        .filter(([date]) => date.startsWith(currentMonth))
+        .reduce((acc, [, data]) => acc + data.up + data.down, 0);
+});
+
+// 获取本地日期格式为 YYYY-MM-DD
+const getLocalYYYYMMDD = (date: Date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+};
+
+// 加载网络流量统计
+const loadTrafficData = () => {
+    try {
+        const stored = localStorage.getItem('nsd_traffic_stats');
+        if (stored) trafficData.value = JSON.parse(stored);
+    } catch (e) {
+        console.error("加载统计数据失败", e);
+    }
+};
+loadTrafficData();
+
+// 切换右侧面板
+const toggleRightPanel = async () => {
+    rightPanel.value = rightPanel.value === 'settings' ? 'stats' : 'settings';
+    localStorage.setItem('nsd_traffic_stats', JSON.stringify(trafficData.value));
+    saveThrottleCounter = 0;
+
+    if (rightPanel.value === 'stats') {
+        await nextTick();
+        initStatsChart();
+    } else {
+        statsChartInstance?.dispose();
+        statsChartInstance = null;
+    }
+
+    // 侧边栏布局变化会挤压左侧卡片，强制让实时走势图重新计算高宽
+    await nextTick();
+    chartInstance?.resize();
+};
+
+const initStatsChart = () => {
+    if (!statsChartRef.value || !echarts) return;
+    statsChartInstance = echarts.init(statsChartRef.value);
+    updateStatsChart();
+};
+
+// 更新数据统计图表
+const updateStatsChart = () => {
+    if (!statsChartInstance) return;
+    const isDark = document.documentElement.classList.contains('dark-theme');
+    const textColor = isDark ? '#94a3b8' : '#64748b';
+    const splitLineColor = isDark ? '#383c41' : '#f1f5f9';
+
+    const days: string[] = [];
+    const upData: number[] = [];
+    const downData: number[] = [];
+
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date();
+        d.setDate(d.getDate() - i);
+        const dateStr = getLocalYYYYMMDD(d);
+        days.push(dateStr.slice(5));
+
+        const dayData = trafficData.value[dateStr] || { up: 0, down: 0 };
+        upData.push(Number((dayData.up / (1024 * 1024)).toFixed(2)));
+        downData.push(Number((dayData.down / (1024 * 1024)).toFixed(2)));
+    }
+
+    statsChartInstance.setOption({
+        tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+        legend: { data: ['上传 (MB)', '下载 (MB)'], textStyle: { color: textColor }, top: 0 },
+        grid: { left: '2%', right: '2%', bottom: '0%', containLabel: true },
+        xAxis: {
+            type: 'category',
+            data: days,
+            axisLabel: { color: textColor },
+            axisLine: { lineStyle: { color: splitLineColor } }
+        },
+        yAxis: {
+            type: 'value',
+            splitLine: { lineStyle: { color: splitLineColor, type: 'dashed' } },
+            axisLabel: { color: textColor }
+        },
+        series: [
+            {
+                name: '上传 (MB)',
+                type: statChartType.value,
+                smooth: true,
+                data: upData,
+                itemStyle: { color: getChartColors().line },
+                barMaxWidth: 15
+            },
+            {
+                name: '下载 (MB)',
+                type: statChartType.value,
+                smooth: true,
+                data: downData,
+                itemStyle: { color: isDark ? '#34d399' : '#10b981' },
+                barMaxWidth: 15
+            }
+        ]
+    });
+};
+
 const toggleAutoStart = async () => {
     try {
         if (autoStart.value) {
             await enable();
-            console.log('已开启开机自启');
         } else {
             await disable();
-            console.log('已关闭开机自启');
         }
     } catch (error) {
-        console.error('修改开机自启状态失败:', error);
         autoStart.value = !autoStart.value;
         showDialog('设置失败', '无法修改开机自启动状态，请检查系统权限。');
     }
@@ -272,7 +438,13 @@ const handleDialogConfirm = () => {
 };
 
 const parseVersion = (v: string) => {
-    return v.replace(/^v/i, '').split('.').map(Number);
+    // 使用正则匹配出类似于 X.Y.Z 的纯数字版本号部分
+    const match = v.match(/\d+\.\d+\.\d+/);
+    if (match) {
+        return match[0].split('.').map(Number);
+    }
+    // 如果实在没匹配到，返回 [0, 0, 0] 防止代码崩溃
+    return [0, 0, 0];
 };
 
 let lastRx = 0;
@@ -305,6 +477,7 @@ const initChart = () => {
     updateChartOption();
 };
 
+// 更新图表选项
 const updateChartOption = () => {
     if (!chartInstance) return;
     const colors = getChartColors();
@@ -330,7 +503,7 @@ const updateChartOption = () => {
     });
 };
 
-// 获取流量
+// 获取并更新网络流量统计
 const fetchSpeedStats = async () => {
     try {
         const [currentRx, currentTx] = await invoke<[number, number]>('get_network_stats');
@@ -339,12 +512,30 @@ const fetchSpeedStats = async () => {
             const txDiff = currentTx - lastTx;
             downloadSpeed.value = formatSpeed(rxDiff);
             uploadSpeed.value = formatSpeed(txDiff);
+
             const speedMB = rxDiff / (1024 * 1024);
 
-            chartDataQueue.push(Number(speedMB.toFixed(2)));
+            // 核心修复：直接压入完整的 speedMB 浮点数，不做保留两位的截断。
+            // 从而使 ECharts 面对极小流量（如 B/s, KB/s 级别）也能捕捉到微小的轴缩放波动。
+            chartDataQueue.push(speedMB);
             if (chartDataQueue.length > 15) chartDataQueue.shift();
 
             chartInstance?.setOption({ series: [{ data: chartDataQueue }] });
+
+            if (rxDiff > 0 || txDiff > 0) {
+                const todayStr = getLocalYYYYMMDD(new Date());
+                if (!trafficData.value[todayStr]) {
+                    trafficData.value[todayStr] = { up: 0, down: 0 };
+                }
+                trafficData.value[todayStr].down += rxDiff;
+                trafficData.value[todayStr].up += txDiff;
+
+                saveThrottleCounter++;
+                if (saveThrottleCounter >= 5) {
+                    localStorage.setItem('nsd_traffic_stats', JSON.stringify(trafficData.value));
+                    saveThrottleCounter = 0;
+                }
+            }
         }
         lastRx = currentRx;
         lastTx = currentTx;
@@ -353,17 +544,27 @@ const fetchSpeedStats = async () => {
     }
 };
 
-// 检查更新
 const checkUpdate = async () => {
+    if (isChecking.value) return; // 防止连点
+    isChecking.value = true;
+
     try {
         const localVersionStr = await getVersion();
+
+        // 加一个 10 秒超时控制器
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+
         const response = await fetch('https://api.github.com/repos/GEORGEWWWU/NetSpeed-Dynamic/releases/latest', {
             method: 'GET',
             headers: {
                 'Accept': 'application/vnd.github.v3+json',
                 'User-Agent': 'Tauri-App-NetSpeed-Dynamic'
-            }
+            },
+            signal: controller.signal
         });
+
+        clearTimeout(timeoutId);
 
         if (response.status === 404) {
             showDialog('检查更新', '未找到可用版本');
@@ -402,13 +603,19 @@ const checkUpdate = async () => {
         } else {
             showDialog('提示', '当前已是最新版本！');
         }
-    } catch (error) {
+    } catch (error: any) {
         console.error('检查更新时出错:', error);
-        showDialog('网络错误', '请求失败，请检查您的网络连接');
+        // 👇 精准识别是不是超时导致的
+        if (error.name === 'AbortError') {
+            showDialog('网络超时', '连接 GitHub 超时，请检查网络或稍后再试');
+        } else {
+            showDialog('网络错误', '请求失败，请检查您的网络连接');
+        }
+    } finally {
+        isChecking.value = false; // 👈 无论成功失败，最后都恢复状态
     }
 };
 
-// 主题切换
 const applyTheme = () => {
     const root = document.documentElement;
     if (themeMode.value === 'dark') {
@@ -454,7 +661,10 @@ onMounted(async () => {
     initChart();
     fetchSpeedStats();
     speedTimer = setInterval(fetchSpeedStats, 1000) as unknown as number;
-    window.addEventListener('resize', () => chartInstance?.resize());
+    window.addEventListener('resize', () => {
+        chartInstance?.resize();
+        statsChartInstance?.resize();
+    });
 
     try {
         autoStart.value = await isEnabled();
@@ -462,7 +672,6 @@ onMounted(async () => {
         console.error("获取自启动状态失败:", e);
     }
 
-    // 获取当前应用版本号 (自动读取 tauri.conf.json)
     try {
         appVersion.value = await getVersion();
     } catch (e) {
@@ -489,7 +698,9 @@ onMounted(async () => {
 onUnmounted(() => {
     clearInterval(speedTimer);
     chartInstance?.dispose();
+    statsChartInstance?.dispose();
     systemThemeMedia?.removeEventListener('change', handleSystemThemeUpdate);
+    localStorage.setItem('nsd_traffic_stats', JSON.stringify(trafficData.value));
 });
 
 const toggleWidget = async () => {
@@ -542,7 +753,7 @@ const toggleWidget = async () => {
     --modal-border: #e2e8f0;
     --modal-h4: #0f172a;
     --modal-p: #64748b;
-    --btn-sec-bg: #f1f5f9;
+    --btn-sec-bg: #ebebeb;
     --btn-sec-color: #64748b;
     --btn-sec-border: #e2e8f0;
     --btn-sec-hover-bg: #e2e8f0;
@@ -599,7 +810,7 @@ const toggleWidget = async () => {
     --modal-border: #383c41;
     --modal-h4: #f8fafc;
     --modal-p: #94a3b8;
-    --btn-sec-bg: #334155;
+    --btn-sec-bg: #1a1a1a;
     --btn-sec-color: #cbd5e1;
     --btn-sec-border: #475569;
     --btn-sec-hover-bg: #475569;
@@ -705,7 +916,7 @@ const toggleWidget = async () => {
 .main-content {
     display: grid;
     grid-template-columns: 1fr 1.3fr;
-    gap: 24px;
+    gap: 18px;
     flex-grow: 1;
     transition: all 0.3s ease;
 }
@@ -1201,5 +1412,77 @@ input:checked+.slider:before {
 
 .manual-ping-btn:active {
     transform: scale(0.96);
+}
+
+/* 数据统计模块样式 */
+.card-header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.card-header-row h3 {
+    margin-bottom: 0;
+}
+
+.stats-toggle-btn {
+    background: transparent;
+    color: var(--item-title-color);
+    border: 1px solid var(--chart-border);
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.stats-toggle-btn:hover {
+    background: var(--btn-sec-bg);
+}
+
+.stats-card {
+    display: flex;
+    flex-direction: column;
+}
+
+.stats-overview {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+}
+
+.stat-box {
+    flex: 1;
+    background: var(--control-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 12px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+
+.stat-label {
+    font-size: 12px;
+    color: var(--item-desc-color);
+    font-weight: 500;
+}
+
+.stat-val {
+    font-size: 15px;
+    font-weight: 700;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    color: var(--speed-value);
+}
+
+.stats-chart-container {
+    width: 100%;
+    flex-grow: 1;
+    min-height: 180px;
+    border-top: 1px solid var(--chart-border);
+    padding-top: 16px;
 }
 </style>

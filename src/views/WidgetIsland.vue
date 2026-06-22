@@ -10,10 +10,7 @@
                     <transition @enter="onInnerEnter" @leave="onInnerLeave" :css="false">
                         <div class="msg-box" v-show="isMsgActive" key="msg">
                             <div class="msg-avatar">
-                                <svg viewBox="0 0 24 24" fill="currentColor">
-                                    <path
-                                        d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 9h12v2H6V9zm8 5H6v-2h8v2zm4-6H6V6h12v2z" />
-                                </svg>
+                                <img src="../assets/logo.png" alt="消息图标" class="msg-avatar-img">
                             </div>
 
                             <div class="msg-text-wrapper">
@@ -1145,11 +1142,11 @@ onUnmounted(() => {
 
 /* 预制消息图标/头像样式 */
 .msg-avatar {
-    width: 32px;
-    height: 32px;
+    width: 35px;
+    height: 35px;
     border-radius: 50%;
     /* 默认圆形，可改为 8px 变成圆角矩形 */
-    background: linear-gradient(135deg, #ff9500 0%, #ff5e3a 100%);
+    background: none;
     /* 渐变亮色背景 */
     display: flex;
     align-items: center;
@@ -1159,9 +1156,11 @@ onUnmounted(() => {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
 }
 
-.msg-avatar svg {
-    width: 18px;
-    height: 18px;
+.msg-avatar-img {
+    width: 35px;
+    height: 35px;
+    border-radius: 50%;
+    object-fit: cover;
 }
 
 /* 文本靠左对齐包裹层 */

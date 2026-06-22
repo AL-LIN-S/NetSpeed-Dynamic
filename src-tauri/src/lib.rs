@@ -184,8 +184,10 @@ async fn fetch_latest_notification() -> Result<Option<(String, String)>, String>
         Err(_) => return Ok(None),
     };
 
+    // 尝试向系统请求通知中心读取权限
     let _ = listener.RequestAccessAsync();
 
+    // 仅抓取系统的 Toast 弹出类通知
     let notifications = match listener.GetNotificationsAsync(NotificationKinds::Toast) {
         Ok(op) => match op.get() {
             Ok(ns) => ns,
@@ -212,88 +214,64 @@ async fn fetch_latest_notification() -> Result<Option<(String, String)>, String>
 
     let last_processed_id = LAST_NOTIFICATION_ID.load(Ordering::SeqCst);
 
+    // 初始化：刚开软件时，以当前的最新一条通知作为基准线
     if !IS_NOTIF_INIT.load(Ordering::SeqCst) {
         LAST_NOTIFICATION_ID.store(max_id, Ordering::SeqCst);
         IS_NOTIF_INIT.store(true, Ordering::SeqCst);
         return Ok(None);
     }
 
+    // 如果发现当前的最大通知 ID 大于上次记录的 ID，说明来了一条崭新的未读通知
     if max_id > last_processed_id {
         LAST_NOTIFICATION_ID.store(max_id, Ordering::SeqCst);
 
         if let Some(notif) = latest_notif {
-            // 提取 toast 文本元素
-            let text_list: Vec<String> = notif
+            // 绕开容易报错的 AppInfo，直接走确定存在的大驼峰 Notification() 链条
+            if let Ok(toast_binding) = notif
                 .Notification()
                 .and_then(|n| n.Visual())
                 .and_then(|v| v.GetBinding(&windows::core::HSTRING::from("ToastGeneric")))
-                .and_then(|b| b.GetTextElements())
-                .map(|elems| {
-                    elems
-                        .into_iter()
-                        .filter_map(|e| e.Text().ok().map(|t| t.to_string()))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            if text_list.is_empty() {
-                return Ok(None);
-            }
-
-            let title = text_list.get(0).cloned().unwrap_or_default();
-            let body = if text_list.len() > 1 {
-                text_list[1..].join(" ")
-            } else {
-                String::new()
-            };
-
-            // 过滤微信
-            if title.contains("微信")
-                || title.contains("WeChat")
-                || body.contains("微信")
-                || body.contains("WeChat")
             {
-                return Ok(None);
-            }
+                if let Ok(text_elements) = toast_binding.GetTextElements() {
+                    let mut text_list = Vec::new();
+                    for elem in text_elements {
+                        if let Ok(text) = elem.Text() {
+                            text_list.push(text.to_string());
+                        }
+                    }
 
-            // 应用名识别策略：
-            // 1. 如果 title 本身就是 "QQ"，直接使用
-            // 2. 否则尝试从 title 中匹配常见应用关键词
-            // 3. 兜底使用 title 作为应用名（Windows 通知规范中 text[0] 通常是应用名或会话名）
-            let app_name = if title == "QQ" {
-                "QQ".to_string()
-            } else if title.contains("钉钉") || title.contains("DingTalk") {
-                "钉钉".to_string()
-            } else if title.contains("飞书") || title.contains("Feishu") {
-                "飞书".to_string()
-            } else if title.contains("Discord") {
-                "Discord".to_string()
-            } else if title.contains("Telegram") {
-                "Telegram".to_string()
-            } else {
-                // 对于 QQ 私聊，title 可能是 "昵称"，body 是消息内容
-                // 此时我们无法区分应用名，但至少保留原始 title
-                // 用户反馈 QQ 通知缺少 "QQ" 字样，说明 QQ 可能把应用名放在了别处
-                // 作为临时修复：如果 body 非空且 title 不像应用名，则强制标记为 QQ
-                // （仅当检测到典型 QQ 消息模式时）
-                if !body.is_empty() && !title.contains("系统") && !title.contains("通知") {
-                    // 启发式判断：如果 title 是中文昵称格式（无空格、长度适中），可能是 QQ
-                    // 这里简单处理：只要不是明显其他应用，就假设是 QQ
-                    // 你可以后续通过日志打印 text_list 来精确调试
-                    "QQ".to_string()
-                } else {
-                    title.clone()
+                    if !text_list.is_empty() {
+                        let title = text_list.first().cloned().unwrap_or_default();
+                        let body = text_list.get(1..).unwrap_or(&[]).join(" ");
+
+                        // 遵照细节：如果通知标题或内容里包含微信或 WeChat，则直接过滤并忽略
+                        if title.contains("微信")
+                            || title.contains("WeChat")
+                            || body.contains("微信")
+                            || body.contains("WeChat")
+                        {
+                            return Ok(None);
+                        }
+
+                        // Toast 的 text[0] 对于 QQ/钉钉/飞书 等应用就是应用名称本身
+                        // 仅在 text[0] 为空时才兜底为 "系统通知"
+                        let app_name = if !title.is_empty() {
+                            title.clone()
+                        } else {
+                            "系统通知".to_string()
+                        };
+
+                        // body 部分只取 text[1] 及之后的内容（不再把应用名重复拼进去）
+                        let msg_content = if text_list.len() > 1 {
+                            text_list[1..].join(" ")
+                        } else {
+                            title.clone()
+                        };
+
+                        return Ok(Some((app_name, msg_content)));
+                    }
                 }
-            };
-
-            // 消息正文：如果有 body 就用 body，否则用 title（单行通知场景）
-            let msg_content = if !body.is_empty() {
-                body
-            } else {
-                title
-            };
-
-            return Ok(Some((app_name, msg_content)));
+            }
         }
     }
 

@@ -3,7 +3,7 @@
         <div v-show="isIslandVisible" :class="['island-container', { 'has-music-border': isGlowBorderEnabled }]"
             @mousedown="handleMouseDown" :style="islandStyle" @contextmenu="handleRightClick">
 
-            <div class="rainbow-border-glow" v-if="isGlowBorderEnabled"></div>
+            <div class="rainbow-border-glow" v-if="isGlowBorderEnabled" :style="{ opacity: glowOpacity }"></div>
 
             <div class="island-core-content" :style="coreContentStyle">
                 <div class="inner-wrapper">
@@ -89,7 +89,8 @@ const islandOpacity = ref(Number(localStorage.getItem('nsd_island_opacity') || '
 const islandTheme = ref(localStorage.getItem('nsd_island_theme') || 'black');
 
 const islandStyle = computed(() => {
-    const alpha = islandOpacity.value / 100;
+    const linear = islandOpacity.value / 100;
+    const alpha = Math.pow(linear, 1 / 2.2);
     if (islandTheme.value === 'white') {
         return {
             backgroundColor: `rgba(255, 255, 255, ${alpha})`,
@@ -103,15 +104,21 @@ const islandStyle = computed(() => {
 });
 
 const coreContentStyle = computed(() => {
-    // 这里的背景色应该跟着主题走，保持是不透明的（或者很高的不透明度），用来遮挡中间的流光
+    const linear = islandOpacity.value / 100;
+    const alpha = Math.pow(linear, 1 / 2.2);
     if (islandTheme.value === 'white') {
         return {
-            backgroundColor: '#ffffff'
+            backgroundColor: `rgba(255, 255, 255, ${alpha})`
         };
     }
     return {
-        backgroundColor: '#000000' // 黑色主题时，核心区域为纯黑
+        backgroundColor: `rgba(0, 0, 0, ${alpha})`
     };
+});
+
+const glowOpacity = computed(() => {
+    const linear = islandOpacity.value / 100;
+    return Math.pow(linear, 1 / 2.2);
 });
 
 const uploadSpeed = ref('0 KB/s');
@@ -594,17 +601,6 @@ onMounted(async () => {
         islandTheme.value = event.payload.theme;
     });
 
-    // 监听来自控制台的音乐控制器状态同步指令
-    await listen<{ enabled: boolean }>('control-music-ctl', (event) => {
-        const isEnabled = event.payload.enabled;
-        isMusicCtlEnabled.value = isEnabled;
-
-        // 【新增】同样加入联动逻辑
-        if (localStorage.getItem('nsd_glow_border') === null) {
-            isGlowBorderEnabled.value = isEnabled;
-        }
-    });
-
     await adjustWindowPosition();
 
     // 先显示透明的 Tauri 窗口，再触发 Vue 的灵动岛入场弹簧动画
@@ -714,12 +710,10 @@ onUnmounted(() => {
 .island-core-content {
     position: relative;
     z-index: 2;
-    /* 压在流光上面 */
     width: 100%;
     height: 100%;
     border-radius: 98px;
-    /* 稍微比外层缩小一点 */
-    backdrop-filter: blur(20px) !important;
+    backdrop-filter: blur(20px);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -872,9 +866,9 @@ onUnmounted(() => {
     border-radius: 50%;
     /* 变成纯圆球形 */
     box-sizing: unset !important;
-    border: 2px solid rgba(255, 255, 255, 0.2) !important;
+    border: 2px solid rgba(255, 255, 255, 0.5) !important;
     /* 2px 的外环 */
-    background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+    /* background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%); */
     flex-shrink: 0;
     overflow: hidden;
     display: flex;

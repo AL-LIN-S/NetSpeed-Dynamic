@@ -8,14 +8,18 @@
             <div class="island-core-content" :style="coreContentStyle">
                 <div class="inner-wrapper">
                     <transition @enter="onInnerEnter" @leave="onInnerLeave" :css="false">
-                        <div class="msg-box" v-show="isMsgActive" key="msg"
-                            style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; flex-direction: column; justify-content: center; align-items: center; width: calc(100% - 40px); height: 100%; text-align: center; overflow: hidden; white-space: nowrap; box-sizing: border-box; z-index: 10;">
-                            <div
-                                style="font-size: 12px; font-weight: bold; opacity: 0.9; text-align: center; margin-bottom: 2px; width: 100%; overflow: hidden; text-overflow: ellipsis;">
-                                {{ msgTitle }}</div>
-                            <div
-                                style="font-size: 11px; opacity: 0.7; text-align: center; width: 100%; overflow: hidden; text-overflow: ellipsis;">
-                                {{ msgBody }}</div>
+                        <div class="msg-box" v-show="isMsgActive" key="msg">
+                            <div class="msg-avatar">
+                                <svg viewBox="0 0 24 24" fill="currentColor">
+                                    <path
+                                        d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 9h12v2H6V9zm8 5H6v-2h8v2zm4-6H6V6h12v2z" />
+                                </svg>
+                            </div>
+
+                            <div class="msg-text-wrapper">
+                                <div class="msg-title">{{ msgTitle }}</div>
+                                <div class="msg-body">{{ msgBody }}</div>
+                            </div>
                         </div>
                     </transition>
 
@@ -1120,5 +1124,81 @@ onUnmounted(() => {
     overflow: hidden;
     color: inherit;
     opacity: 0.9;
+}
+
+/* 灵动岛消息通知样式 */
+.msg-box {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    padding: 0 45px 0 0px;
+    /* 右侧 45px 留给状态灯安全区域，左侧 16px 间距 */
+    box-sizing: border-box;
+    z-index: 10;
+    gap: 12px;
+    /* 图标与文本的间距 */
+}
+
+/* 预制消息图标/头像样式 */
+.msg-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    /* 默认圆形，可改为 8px 变成圆角矩形 */
+    background: linear-gradient(135deg, #ff9500 0%, #ff5e3a 100%);
+    /* 渐变亮色背景 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #ffffff;
+    flex-shrink: 0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.msg-avatar svg {
+    width: 18px;
+    height: 18px;
+}
+
+/* 文本靠左对齐包裹层 */
+.msg-text-wrapper {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+    /* 核心：强制内部文本左对齐 */
+    overflow: hidden;
+    flex-grow: 1;
+}
+
+/* 调大后的标题样式 */
+.msg-title {
+    font-size: 14px;
+    /* 从 12px 放大到 14px */
+    font-weight: 700;
+    line-height: 1.4;
+    opacity: 0.95;
+    text-align: left;
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* 调大后的内容样式 */
+.msg-body {
+    font-size: 12.5px;
+    /* 从 11px 放大到 12.5px */
+    line-height: 1.4;
+    opacity: 0.75;
+    text-align: left;
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 </style>

@@ -10,7 +10,7 @@
                     <transition @enter="onInnerEnter" @leave="onInnerLeave" :css="false">
                         <div class="msg-box" v-show="isMsgActive" key="msg">
                             <div class="msg-avatar">
-                                <img src="../assets/logo.png" alt="消息图标" class="msg-avatar-img">
+                                <img :src="currentMsgIcon" alt="消息图标" class="msg-avatar-img">
                             </div>
 
                             <div class="msg-text-wrapper">
@@ -695,6 +695,31 @@ const animateIslandSize = (targetWidth: number, targetHeight: number) => {
     requestAnimationFrame(run);
 };
 
+// 引入你的默认图标作为兜底
+import defaultLogo from '../assets/logo.png';
+const currentMsgIcon = ref(defaultLogo);
+
+// 极简版图标映射器 (你可以随时去 iconfont 找喜欢的图标放进 assets)
+const getAppIcon = (appName: string) => {
+    const name = appName.toLowerCase();
+
+    if (name.includes('qq')) {
+        // 使用 new URL 让 Vite 知道你要引入这个资源
+        return new URL('../assets/qq.png', import.meta.url).href;
+    }
+    if (name.includes('钉钉') || name.includes('dingtalk')) {
+        return new URL('../assets/dingtalk.png', import.meta.url).href;
+    }
+    if (name.includes('mail') || name.includes('邮件')) {
+        return new URL('../assets/mail.png', import.meta.url).href;
+    }
+    if (name.includes('wechat') || name.includes('微信')) {
+        return new URL('../assets/wechat.png', import.meta.url).href;
+    }
+
+    return defaultLogo;
+};
+
 onMounted(async () => {
     document.addEventListener('contextmenu', (e) => {
         e.preventDefault();
@@ -781,23 +806,32 @@ onMounted(async () => {
         const enabled = localStorage.getItem('nsd_msg_notify') === 'true';
         if (enabled) {
             try {
-                const res = await invoke<[string, string] | null>('fetch_latest_notification');
+                // 注意这里类型变了，接收任意对象
+                const res = await invoke<any>('fetch_latest_notification');
                 if (res) {
-                    const [appName, content] = res;
-                    msgTitle.value = appName;
-                    msgBody.value = content;
+                    // res 结构：{ app_name: string, title: string, body: string }
+
+                    // 1. 标题直接显示程序名
+                    msgTitle.value = res.app_name;
+
+                    // 2. 内容拼接原来的 [标题: 内容]
+                    if (res.body) {
+                        msgBody.value = `${res.title}: ${res.body}`;
+                    } else {
+                        msgBody.value = res.title;
+                    }
+
+                    // 3. 动态替换头像
+                    currentMsgIcon.value = getAppIcon(res.app_name);
 
                     if (!isMsgActive.value) {
                         isMsgActive.value = true;
-                        // 使用 AE 弹性曲线动画平滑扩增灵动岛到（宽360，高65）
                         animateIslandSize(360, 65);
                     }
 
-                    // 弹出 5 秒后，自动恢复收回
                     if ((window as any).msgTimer) clearTimeout((window as any).msgTimer);
                     (window as any).msgTimer = setTimeout(() => {
                         isMsgActive.value = false;
-                        // 使用 AE 弹性曲线动画平滑收回灵动岛原有胶囊大小（宽260，高42）
                         animateIslandSize(260, 42);
                     }, 5000);
                 }
@@ -1231,8 +1265,8 @@ onUnmounted(() => {
 }
 
 .msg-avatar-img {
-    width: 35px;
-    height: 35px;
+    width: 30px;
+    height: 30px;
     border-radius: 50%;
     object-fit: cover;
 }

@@ -17,6 +17,13 @@ struct MusicInfo {
     title: String,
 }
 
+#[derive(serde::Serialize, Clone)]
+pub struct ToastData {
+    pub app_name: String,
+    pub title: String,
+    pub body: String,
+}
+
 // 外部枚举的回调函数
 unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: winapi::shared::minwindef::LPARAM) -> winapi::shared::minwindef::BOOL {
     if IsWindowVisible(hwnd) == 0 {
@@ -175,7 +182,7 @@ fn control_system_media(action: String) {
 }
 
 #[tauri::command]
-async fn fetch_latest_notification() -> Result<Option<(String, String)>, String> {
+async fn fetch_latest_notification() -> Result<Option<ToastData>, String> {
     use windows::UI::Notifications::Management::UserNotificationListener;
     use windows::UI::Notifications::NotificationKinds;
 
@@ -184,10 +191,8 @@ async fn fetch_latest_notification() -> Result<Option<(String, String)>, String>
         Err(_) => return Ok(None),
     };
 
-    // 尝试向系统请求通知中心读取权限
     let _ = listener.RequestAccessAsync();
 
-    // 仅抓取系统的 Toast 弹出类通知
     let notifications = match listener.GetNotificationsAsync(NotificationKinds::Toast) {
         Ok(op) => match op.get() {
             Ok(ns) => ns,
@@ -214,19 +219,23 @@ async fn fetch_latest_notification() -> Result<Option<(String, String)>, String>
 
     let last_processed_id = LAST_NOTIFICATION_ID.load(Ordering::SeqCst);
 
-    // 初始化：刚开软件时，以当前的最新一条通知作为基准线
     if !IS_NOTIF_INIT.load(Ordering::SeqCst) {
         LAST_NOTIFICATION_ID.store(max_id, Ordering::SeqCst);
         IS_NOTIF_INIT.store(true, Ordering::SeqCst);
         return Ok(None);
     }
 
-    // 如果发现当前的最大通知 ID 大于上次记录的 ID，说明来了一条崭新的未读通知
     if max_id > last_processed_id {
         LAST_NOTIFICATION_ID.store(max_id, Ordering::SeqCst);
 
         if let Some(notif) = latest_notif {
-            // 绕开容易报错的 AppInfo，直接走确定存在的大驼峰 Notification() 链条
+            // 1. 【核心修复】通过 AppInfo 获取精准的程序名称
+            let app_name = notif.AppInfo()
+                .and_then(|info| info.DisplayInfo())
+                .and_then(|dinfo| dinfo.DisplayName())
+                .map(|name| name.to_string())
+                .unwrap_or_else(|_| "系统通知".to_string());
+
             if let Ok(toast_binding) = notif
                 .Notification()
                 .and_then(|n| n.Visual())
@@ -241,10 +250,15 @@ async fn fetch_latest_notification() -> Result<Option<(String, String)>, String>
                     }
 
                     if !text_list.is_empty() {
+                        // 2. 分离标题和内容
                         let title = text_list.first().cloned().unwrap_or_default();
-                        let body = text_list.get(1..).unwrap_or(&[]).join(" ");
+                        let body = if text_list.len() > 1 {
+                            text_list[1..].join(" ")
+                        } else {
+                            String::new()
+                        };
 
-                        // 遵照细节：如果通知标题或内容里包含微信或 WeChat，则直接过滤并忽略
+                        // 3. 过滤微信（保留你原有的逻辑）
                         if title.contains("微信")
                             || title.contains("WeChat")
                             || body.contains("微信")
@@ -253,22 +267,12 @@ async fn fetch_latest_notification() -> Result<Option<(String, String)>, String>
                             return Ok(None);
                         }
 
-                        // Toast 的 text[0] 对于 QQ/钉钉/飞书 等应用就是应用名称本身
-                        // 仅在 text[0] 为空时才兜底为 "系统通知"
-                        let app_name = if !title.is_empty() {
-                            title.clone()
-                        } else {
-                            "系统通知".to_string()
-                        };
-
-                        // body 部分只取 text[1] 及之后的内容（不再把应用名重复拼进去）
-                        let msg_content = if text_list.len() > 1 {
-                            text_list[1..].join(" ")
-                        } else {
-                            title.clone()
-                        };
-
-                        return Ok(Some((app_name, msg_content)));
+                        // 4. 返回打包好的数据
+                        return Ok(Some(ToastData {
+                            app_name,
+                            title,
+                            body,
+                        }));
                     }
                 }
             }

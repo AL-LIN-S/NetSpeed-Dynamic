@@ -220,9 +220,10 @@
             <span>&copy; 2026 <button class="openmywebsite" @click="openMywebsite">Ryen.</button> All rights
                 reserved.</span>
             <span class="action-link"
-                :style="{ opacity: isChecking ? 0.5 : 1, pointerEvents: isChecking ? 'none' : 'auto' }"
+                :style="{ opacity: isChecking ? 0.5 : 1, pointerEvents: isChecking ? 'none' : 'auto', position: 'relative' }"
                 @click="checkUpdate">
-                {{ isChecking ? '检查中...' : '检查更新' }}
+                <span v-if="hasNewVersion" class="update-dot"></span>
+                {{ isChecking ? '检查中...' : (hasNewVersion ? '检测到新版本' : '检查更新') }}
             </span>
         </footer>
 
@@ -269,6 +270,7 @@ const appVersion = ref('1.0.0');
 const isDynamicSet = ref(false);
 
 const isChecking = ref(false);
+const hasNewVersion = ref(false);
 
 // 灵动岛设置相关的 UI 状态绑定
 const islandTheme = ref(localStorage.getItem('nsd_island_theme') || 'black');
@@ -587,6 +589,36 @@ const openMywebsite = () => {
     openUrl('https://blog.georgewu.top');
 }
 
+// 新增：静默检查更新（后台偷偷查，不弹窗，报错了也不干扰用户）
+const silentCheckUpdate = async () => {
+    try {
+        const localVersionStr = await getVersion();
+        const response = await fetch('https://api.github.com/repos/GEORGEWWWU/NetSpeed-Dynamic/releases/latest', {
+            method: 'GET',
+            headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Tauri-App-NetSpeed-Dynamic' }
+        });
+        if (!response.ok) return;
+
+        const data = await response.json();
+        const remoteVersionStr = data.tag_name;
+        const local = parseVersion(localVersionStr);
+        const remote = parseVersion(remoteVersionStr);
+
+        for (let i = 0; i < 3; i++) {
+            const rNum = remote[i] || 0;
+            const lNum = local[i] || 0;
+            if (rNum > lNum) {
+                hasNewVersion.value = true; // 发现新版本，把红点亮起来
+                break;
+            } else if (rNum < lNum) {
+                break;
+            }
+        }
+    } catch (error) {
+        // 静默模式失败就当无事发生
+    }
+};
+
 const checkUpdate = async () => {
     if (isChecking.value) return; // 防止连点
     isChecking.value = true;
@@ -624,26 +656,31 @@ const checkUpdate = async () => {
         const local = parseVersion(localVersionStr);
         const remote = parseVersion(remoteVersionStr);
 
-        let hasNewVersion = false;
+        let findNew = false;
         for (let i = 0; i < 3; i++) {
             const rNum = remote[i] || 0;
             const lNum = local[i] || 0;
             if (rNum > lNum) {
-                hasNewVersion = true;
+                findNew = true;
                 break;
             } else if (rNum < lNum) {
                 break;
             }
         }
 
-        if (hasNewVersion) {
+        if (findNew) {
+            hasNewVersion.value = true;
             showDialog(
                 '发现新版本',
                 `发现新版本 ${remoteVersionStr}！当前版本为 v${localVersionStr}。是否前往 GitHub 下载更新？`,
                 true,
-                () => { openUrl(data.html_url); }
+                () => {
+                    openUrl(data.html_url);
+                    hasNewVersion.value = false; // 用户点击去更新后，消掉红点并恢复文字
+                }
             );
         } else {
+            hasNewVersion.value = false;
             showDialog('提示', '当前已是最新版本！');
         }
     } catch (error: any) {
@@ -732,6 +769,8 @@ watch(enableMusicCtrl, async (newVal) => {
 });
 
 onMounted(async () => {
+    silentCheckUpdate();
+
     window.addEventListener('contextmenu', (e) => {
         e.preventDefault();
     }, { capture: true });
@@ -1248,6 +1287,17 @@ input:checked+.slider:before {
 .action-link:hover {
     color: var(--footer-text);
     text-decoration: underline;
+}
+
+.update-dot {
+    position: absolute;
+    top: 2px;
+    right: -8px;
+    width: 5px;
+    height: 5px;
+    background-color: #ff3b30;
+    border-radius: 50%;
+    box-shadow: 0 0 4px rgba(255, 59, 48, 0.4);
 }
 
 .modal-overlay {

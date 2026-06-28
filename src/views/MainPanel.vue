@@ -169,28 +169,24 @@
                                 <img src="../assets/musci163.svg" class="platform-icon" alt="icon">
                                 网易云
                             </div>
-                            <div class="capsule-btn" :class="{ 'is-active': targetPlayer === 'spotify' }"
-                                @click="setTargetPlayer('spotify')">
+
+                            <div class="capsule-btn" style="opacity: 0.4; cursor: not-allowed; pointer-events: none;">
                                 <img src="../assets/Spotify.svg" class="platform-icon" alt="icon">
                                 Spotify
                             </div>
-                            <div class="capsule-btn" :class="{ 'is-active': targetPlayer === 'apple' }"
-                                @click="setTargetPlayer('apple')">
+                            <div class="capsule-btn" style="opacity: 0.4; cursor: not-allowed; pointer-events: none;">
                                 <img src="../assets/applemusic.svg" class="platform-icon" alt="icon">
                                 Apple
                             </div>
-                            <div class="capsule-btn" :class="{ 'is-active': targetPlayer === 'qqmusic' }"
-                                @click="setTargetPlayer('qqmusic')">
+                            <div class="capsule-btn" style="opacity: 0.4; cursor: not-allowed; pointer-events: none;">
                                 <img src="../assets/qqmusic.svg" class="platform-icon" alt="icon">
                                 QQ音乐
                             </div>
-                            <div class="capsule-btn" :class="{ 'is-active': targetPlayer === 'kugou' }"
-                                @click="setTargetPlayer('kugou')">
+                            <div class="capsule-btn" style="opacity: 0.4; cursor: not-allowed; pointer-events: none;">
                                 <img src="../assets/kugou.svg" class="platform-icon" alt="icon">
                                 酷狗
                             </div>
-                            <div class="capsule-btn" :class="{ 'is-active': targetPlayer === 'echo' }"
-                                @click="setTargetPlayer('echo')">
+                            <div class="capsule-btn" style="opacity: 0.4; cursor: not-allowed; pointer-events: none;">
                                 <img src="../assets/echomusic.ico" class="platform-icon" alt="icon">
                                 EchoMusic
                             </div>
@@ -235,7 +231,7 @@
                         <div class="set-item-meta">
                             <span class="set-item-title">系统硬件监控 <p class="set-item-pro-tag">PRO</p></span>
                             <span class="set-item-desc">{{ enableRotation ? '轮换开启中，已禁用' : '显示 CPU / GPU / 内存实时占用率'
-                            }}</span>
+                                }}</span>
                         </div>
                         <label class="switch">
                             <input type="checkbox" v-model="enableHardwareMon" @change="toggleHardwareMon"
@@ -1379,7 +1375,7 @@ input:checked+.slider:before {
 }
 
 .panel-footer {
-    margin-top: 20px;
+    margin-top: 25px;
     display: flex;
     flex-direction: row;
     justify-content: space-between;
@@ -1627,7 +1623,7 @@ input:checked+.slider:before {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    height: 95px;
+    height: 92px;
     padding: 0 24px;
     box-sizing: border-box;
 }

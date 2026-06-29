@@ -179,15 +179,17 @@
                                 <img src="../assets/applemusic.svg" class="platform-icon" alt="icon">
                                 Apple
                             </div>
-
-                            <div class="capsule-btn" style="opacity: 0.4; cursor: not-allowed; pointer-events: none;">
+                            <div class="capsule-btn" :class="{ 'is-active': targetPlayer === 'qqmusic' }"
+                                @click="setTargetPlayer('qqmusic')">
                                 <img src="../assets/qqmusic.svg" class="platform-icon" alt="icon">
                                 QQ音乐
                             </div>
-                            <div class="capsule-btn" style="opacity: 0.4; cursor: not-allowed; pointer-events: none;">
+                            <div class="capsule-btn" :class="{ 'is-active': targetPlayer === 'kugou' }"
+                                @click="setTargetPlayer('kugou')">
                                 <img src="../assets/kugou.svg" class="platform-icon" alt="icon">
                                 酷狗
                             </div>
+
                             <div class="capsule-btn" style="opacity: 0.4; cursor: not-allowed; pointer-events: none;">
                                 <img src="../assets/echomusic.ico" class="platform-icon" alt="icon">
                                 EchoMusic

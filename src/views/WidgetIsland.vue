@@ -1,7 +1,8 @@
 <template>
     <transition @enter="onEnter" @leave="onLeave" :css="false">
         <div v-show="isIslandVisible" :class="['island-container', { 'has-music-border': isGlowBorderEnabled }]"
-            @mousedown="handleMouseDown" :style="islandStyle" @contextmenu="handleRightClick">
+            @mousedown="handleMouseDown" @mousemove="handleMouseMove" @mouseup="handleMouseUp" :style="islandStyle"
+            @contextmenu="handleRightClick">
 
             <div class="rainbow-border-glow" v-if="isGlowBorderEnabled" :style="{ opacity: glowOpacity }"></div>
 
@@ -26,26 +27,27 @@
                             <div class="hw-item">
                                 <span class="hw-label">CPU</span>
                                 <span class="hw-value" :class="{ 'high-usage': parseInt(cpuUsage) >= 90 }">{{ cpuUsage
-                                }}</span>
+                                    }}</span>
                             </div>
                             <div class="hw-divider"></div>
                             <div class="hw-item">
                                 <span class="hw-label">GPU</span>
                                 <span class="hw-value" :class="{ 'high-usage': parseInt(gpuUsage) >= 90 }">{{ gpuUsage
-                                }}</span>
+                                    }}</span>
                             </div>
                             <div class="hw-divider"></div>
                             <div class="hw-item">
                                 <span class="hw-label">RAM</span>
                                 <span class="hw-value" :class="{ 'high-usage': parseInt(memUsage) >= 90 }">{{ memUsage
-                                }}</span>
+                                    }}</span>
                             </div>
                         </div>
                     </transition>
 
                     <transition @enter="onInnerEnter" @leave="onInnerLeave" :css="false">
                         <div class="music-ctl-box" v-show="displayMusic" :key="musicBoxKey"
-                            @mouseenter="handleMusicBoxEnter" @mouseleave="handleMusicBoxLeave">
+                            @mouseenter="handleMusicBoxEnter" @mouseleave="handleMusicBoxLeave" @click="expandMusic"
+                            style="cursor: pointer;">
 
                             <div class="album-cover" :class="{ 'is-playing': isPlaying }">
                                 <div class="cover-inner"
@@ -110,7 +112,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed, type CSSProperties } from 'vue';
+import { ref, onMounted, onUnmounted, computed, watch, type CSSProperties } from 'vue';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, currentMonitor, PhysicalPosition, LogicalPosition, PhysicalSize } from '@tauri-apps/api/window'; import { Menu, MenuItem } from '@tauri-apps/api/menu';
 import { listen, emit } from '@tauri-apps/api/event';
@@ -123,7 +125,6 @@ const islandOpacity = ref(Number(localStorage.getItem('nsd_island_opacity') || '
 
 const islandTheme = ref(localStorage.getItem('nsd_island_theme') || 'black');
 
-// 修改后的 islandStyle
 const islandStyle = computed<CSSProperties>(() => {
     const linear = islandOpacity.value / 100;
     const alpha = Math.pow(linear, 1 / 2.2);
@@ -139,20 +140,27 @@ const islandStyle = computed<CSSProperties>(() => {
         ...baseStyle,
         width: `${currentWidth.value}px`,
         height: `${currentHeight.value}px`,
-        position: 'relative', // 改为相对定位或保留，由父级负责居中
+        // 👇 新增这一行：高度大于 60 时变成带圆角的长方形，否则是胶囊
+        borderRadius: currentHeight.value > 60 ? '24px' : '100px',
+        position: 'relative',
     };
 });
 
 const coreContentStyle = computed(() => {
     const linear = islandOpacity.value / 100;
     const alpha = Math.pow(linear, 1 / 2.2);
+    // 👇 新增这一行：内层圆角稍微比外层小一点点，贴合更完美
+    const radius = currentHeight.value > 60 ? '22px' : '98px';
+
     if (islandTheme.value === 'white') {
         return {
-            backgroundColor: `rgba(255, 255, 255, ${alpha})`
+            backgroundColor: `rgba(255, 255, 255, ${alpha})`,
+            borderRadius: radius // 👇 加上它
         };
     }
     return {
-        backgroundColor: `rgba(0, 0, 0, ${alpha})`
+        backgroundColor: `rgba(0, 0, 0, ${alpha})`,
+        borderRadius: radius // 👇 加上它
     };
 });
 
@@ -566,28 +574,40 @@ const onLeave = (el: Element, done: () => void) => {
     requestAnimationFrame(animate);
 };
 
-const handleMouseDown = async (event: MouseEvent) => {
-    // 【新增的核心锁定逻辑】：如果开启了置于任务栏，直接拦截，禁止任何拖拽！
-    if (isPinnedToTaskbar.value || isPositionLocked.value) return;
+let mouseDownX = 0;
+let mouseDownY = 0;
+let isMouseDown = false;
 
-    // 如果点击的是按钮或按钮内部的 SVG 图标，直接返回，不触发拖拽
+const handleMouseDown = (event: MouseEvent) => {
+    // ❌ 删掉这行！不要在这里拦截锁定状态！
+    // if (isPinnedToTaskbar.value || isPositionLocked.value) return; 
+
     if ((event.target as HTMLElement).closest('.ctl-btn')) return;
 
-    const target = event.target as HTMLElement;
+    // ✅ 无论有没有锁定，都必须老老实实记录坐标，给后面的“点击展开”提供判断依据！
+    mouseDownX = event.clientX;
+    mouseDownY = event.clientY;
+    isMouseDown = true;
+};
 
-    // 如果点击的是按钮或者消息框，直接返回，不触发窗口拖拽
-    if (target.closest('.ctl-btn') || target.closest('.msg-box')) {
-        return;
-    }
+const handleMouseMove = async (event: MouseEvent) => {
+    if (!isMouseDown) return;
 
-    // 只有按鼠标左键时才触发窗口拖拽，把右键留给自定义菜单
-    if (event.button === 0) {
+    // ✅ 锁定位置的拦截放在这里！只禁止拖拽，绝不影响点击！
+    if (isPinnedToTaskbar.value || isPositionLocked.value) return;
+
+    if (Math.abs(event.clientX - mouseDownX) > 5 || Math.abs(event.clientY - mouseDownY) > 5) {
+        isMouseDown = false;
         try {
             await getCurrentWindow().startDragging();
         } catch (error) {
             console.error('拖拽失败:', error);
         }
     }
+};
+
+const handleMouseUp = () => {
+    isMouseDown = false;
 };
 
 const handleRightClick = async (event: MouseEvent) => {
@@ -752,17 +772,35 @@ const handleMsgClick = async () => {
 let trackedPhysicalX = 0;
 let trackedPhysicalY = 0;
 
+// 新增这行，用来记录当前动画 ID，方便随时打断
+let sizeAnimId = 0;
+// 1️⃣ 新增这行：用来记住绝对中心点，防止四舍五入误差积累
+let fixedCenterPhysicalX = 0;
+
 // 灵动岛核心代码！（优化性能版）
 const animateIslandSize = (targetWidth: number, targetHeight: number) => {
+    // 2️⃣ 核心逻辑：判断是不是“打断状态”
+    const isInterrupting = sizeAnimId !== 0;
+
+    if (isInterrupting) cancelAnimationFrame(sizeAnimId);
+
     const startWidth = currentWidth.value;
     const startHeight = currentHeight.value;
 
-    // 如果大小没变直接拦截，拒绝无意义的性能损耗
-    if (startWidth === targetWidth && startHeight === targetHeight) return;
+    if (startWidth === targetWidth && startHeight === targetHeight) {
+        sizeAnimId = 0;
+        return;
+    }
 
     const appWindow = getCurrentWindow();
     const dpr = window.devicePixelRatio;
-    const centerPhysicalX = trackedPhysicalX + (startWidth * dpr) / 2;
+
+    // 3️⃣ 终极防漂移机制：如果是在静止状态下启动，就计算中心点并锁死；如果是连点打断，直接沿用上一次锁死的中心点！
+    if (!isInterrupting) {
+        fixedCenterPhysicalX = trackedPhysicalX + (startWidth * dpr) / 2;
+    }
+
+    const centerPhysicalX = fixedCenterPhysicalX;
     const originPhysicalY = trackedPhysicalY;
 
     const start = performance.now();
@@ -770,7 +808,7 @@ const animateIslandSize = (targetWidth: number, targetHeight: number) => {
     const decay = 10.5;
     const duration = 600;
 
-    let lastIpcTime = 0; // 用于节流控制 Tauri 底层通讯频率
+    let lastIpcTime = 0;
 
     const run = (time: number) => {
         const t = (time - start) / 1000;
@@ -781,39 +819,83 @@ const animateIslandSize = (targetWidth: number, targetHeight: number) => {
         const currentW = startWidth + (targetWidth - startWidth) * spring;
         const currentH = startHeight + (targetHeight - startHeight) * spring;
 
-        // 1. 纯前端内存与 DOM 渲染，绝不阻塞，随便跑满 144Hz/240Hz
         currentWidth.value = currentW;
         currentHeight.value = currentH;
 
-        // 2. 核心修复：异步平滑追踪
-        // 设置 12 毫秒的节流阀（约 60 FPS），确保不拥堵 Tauri 的 IPC 通道
         if (time - lastIpcTime > 16) {
             const currentLeftX = Math.round(centerPhysicalX - (currentW * dpr) / 2);
-
-            // 重点：【千万不要加 await】！直接把指令丢给操作系统后台执行。
-            // 这样系统窗口会每次微调几个像素紧紧包裹 DOM，彻底消除 margin 计算带来的跳跃闪烁！
             appWindow.setPosition(new PhysicalPosition(currentLeftX, originPhysicalY)).catch(() => { });
             appWindow.setSize(new PhysicalSize(Math.ceil(currentW * dpr), Math.ceil(currentH * dpr))).catch(() => { });
 
+            trackedPhysicalX = currentLeftX;
             lastIpcTime = time;
         }
 
         if (progress < 1) {
-            requestAnimationFrame(run);
+            sizeAnimId = requestAnimationFrame(run);
         } else {
-            // 动画结束，数值兜底
+            // 4️⃣ 动画彻底结束，清空 ID，表示回到“静止状态”
+            sizeAnimId = 0;
             currentWidth.value = targetWidth;
             currentHeight.value = targetHeight;
             trackedPhysicalX = Math.round(centerPhysicalX - (targetWidth * dpr) / 2);
-
-            // 进行最后一次严丝合缝的最终尺寸坐标锁定
             appWindow.setPosition(new PhysicalPosition(trackedPhysicalX, originPhysicalY)).catch(() => { });
             appWindow.setSize(new PhysicalSize(Math.ceil(targetWidth * dpr), Math.ceil(targetHeight * dpr))).catch(() => { });
         }
     };
 
-    requestAnimationFrame(run);
+    sizeAnimId = requestAnimationFrame(run);
 };
+
+// 记录音乐岛是否处于展开状态
+const isMusicExpanded = ref(false);
+let musicExpandTimer: number | null = null;
+
+// 自动收缩方法
+const collapseMusic = () => {
+    if (!isMusicExpanded.value) return;
+    isMusicExpanded.value = false;
+    if (musicExpandTimer) clearTimeout(musicExpandTimer);
+    animateIslandSize(260, 42); // 恢复到默认大小
+};
+
+// 点击展开方法
+const expandMusic = (e: MouseEvent) => {
+    // 👇 新增防误触：如果鼠标发生了滑动（拖拽超过 5 像素），就不触发点击展开！
+    if (Math.abs(e.clientX - mouseDownX) > 5 || Math.abs(e.clientY - mouseDownY) > 5) {
+        return;
+    }
+
+    // 如果点击的是播放、切歌等小按钮，不要触发缩放
+    if ((e.target as HTMLElement).closest('.ctl-btn')) return;
+
+    if (isMusicExpanded.value) {
+        // 如果已经展开了，随便点一下重置 3 秒倒计时
+        if (musicExpandTimer) clearTimeout(musicExpandTimer);
+        musicExpandTimer = window.setTimeout(collapseMusic, 3000);
+        return;
+    }
+
+    // 1. 弹性按压动画 (先微微变小)
+    animateIslandSize(245, 38);
+
+    // 2. 延迟 120 毫秒后，打断缩小，直接猛烈展开 (模拟果冻回弹)
+    setTimeout(() => {
+        isMusicExpanded.value = true;
+        // 宽度和消息一样(360)，高度加 50 左右(42+73=115)，形成带圆角的长方形
+        animateIslandSize(360, 115);
+
+        // 3. 开启 3 秒未响应自动收缩
+        if (musicExpandTimer) clearTimeout(musicExpandTimer);
+        musicExpandTimer = window.setTimeout(collapseMusic, 3000);
+    }, 120);
+};
+
+watch(displayMusic, (newVal: boolean) => {
+    if (!newVal) {
+        collapseMusic(); // 一旦音乐岛被隐藏（不管是因为轮换还是手动关了），立刻收缩
+    }
+});
 
 // 引入你的默认图标作为兜底
 import defaultLogo from '../assets/logo.png';
@@ -841,6 +923,8 @@ const getAppIcon = (appName: string) => {
 };
 
 onMounted(async () => {
+    window.addEventListener('blur', collapseMusic);
+
     document.addEventListener('contextmenu', (e) => {
         e.preventDefault();
     }, { capture: true }); // 使用捕获阶段，确保先于 Tauri 底层拦截
@@ -1064,6 +1148,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+    window.removeEventListener('blur', collapseMusic);
     clearInterval(speedTimer);
     clearInterval(pingTimer);
     stopHideTimer();
@@ -1108,7 +1193,7 @@ onUnmounted(() => {
     -webkit-user-select: none;
     overflow: hidden;
     background: transparent;
-    transition: background 0.4s ease;
+    transition: background 0.4s ease, border-radius 0.3s ease;
     box-sizing: border-box;
 }
 
@@ -1146,6 +1231,7 @@ onUnmounted(() => {
     justify-content: space-between;
     padding: 0 14px;
     overflow: hidden;
+    transition: border-radius 0.3s ease;
 }
 
 /* 4. 顺时针匀速旋转 */

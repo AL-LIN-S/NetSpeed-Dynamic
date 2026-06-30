@@ -27,19 +27,19 @@
                             <div class="hw-item">
                                 <span class="hw-label">CPU</span>
                                 <span class="hw-value" :class="{ 'high-usage': parseInt(cpuUsage) >= 90 }">{{ cpuUsage
-                                }}</span>
+                                    }}</span>
                             </div>
                             <div class="hw-divider"></div>
                             <div class="hw-item">
                                 <span class="hw-label">GPU</span>
                                 <span class="hw-value" :class="{ 'high-usage': parseInt(gpuUsage) >= 90 }">{{ gpuUsage
-                                }}</span>
+                                    }}</span>
                             </div>
                             <div class="hw-divider"></div>
                             <div class="hw-item">
                                 <span class="hw-label">RAM</span>
                                 <span class="hw-value" :class="{ 'high-usage': parseInt(memUsage) >= 90 }">{{ memUsage
-                                }}</span>
+                                    }}</span>
                             </div>
                         </div>
                     </transition>
@@ -1443,15 +1443,17 @@ onUnmounted(() => {
 }
 
 .music-controls {
-    position: absolute;
+    /* 将 absolute 改为 fixed，彻底突破 .inner-wrapper 的宽度限制 */
+    position: fixed;
     left: 50%;
-    transform: translateX(-50%);
-    /* 核心：让控件组在灵动岛内绝对水平居中 */
+    top: 50%;
+    /* 同时兼顾水平和垂直居中 */
+    transform: translate(-50%, -50%);
     display: flex;
     align-items: center;
     gap: 12px;
-    /* 间距拉开一点更舒展 */
-    z-index: 1;
+    z-index: 10;
+    /* 适当提高层级，防止被遮挡 */
 }
 
 .ctl-btn {

@@ -27,19 +27,19 @@
                             <div class="hw-item">
                                 <span class="hw-label">CPU</span>
                                 <span class="hw-value" :class="{ 'high-usage': parseInt(cpuUsage) >= 90 }">{{ cpuUsage
-                                    }}</span>
+                                }}</span>
                             </div>
                             <div class="hw-divider"></div>
                             <div class="hw-item">
                                 <span class="hw-label">GPU</span>
                                 <span class="hw-value" :class="{ 'high-usage': parseInt(gpuUsage) >= 90 }">{{ gpuUsage
-                                    }}</span>
+                                }}</span>
                             </div>
                             <div class="hw-divider"></div>
                             <div class="hw-item">
                                 <span class="hw-label">RAM</span>
                                 <span class="hw-value" :class="{ 'high-usage': parseInt(memUsage) >= 90 }">{{ memUsage
-                                    }}</span>
+                                }}</span>
                             </div>
                         </div>
                     </transition>
@@ -777,9 +777,9 @@ let sizeAnimId = 0;
 // 1️⃣ 新增这行：用来记住绝对中心点，防止四舍五入误差积累
 let fixedCenterPhysicalX = 0;
 
-// 灵动岛核心代码！（优化性能版）
+// 灵动岛核心代码！（完美防漂移+防裁切优化版）
 const animateIslandSize = (targetWidth: number, targetHeight: number) => {
-    // 2️⃣ 核心逻辑：判断是不是“打断状态”
+    // 核心逻辑：判断是不是“打断状态”
     const isInterrupting = sizeAnimId !== 0;
 
     if (isInterrupting) cancelAnimationFrame(sizeAnimId);
@@ -795,7 +795,7 @@ const animateIslandSize = (targetWidth: number, targetHeight: number) => {
     const appWindow = getCurrentWindow();
     const dpr = window.devicePixelRatio;
 
-    // 3️⃣ 终极防漂移机制：如果是在静止状态下启动，就计算中心点并锁死；如果是连点打断，直接沿用上一次锁死的中心点！
+    // 终极防漂移机制：如果是在静止状态下启动，就计算中心点并锁死；如果是连点打断，直接沿用上一次锁死的中心点！
     if (!isInterrupting) {
         fixedCenterPhysicalX = trackedPhysicalX + (startWidth * dpr) / 2;
     }
@@ -814,18 +814,51 @@ const animateIslandSize = (targetWidth: number, targetHeight: number) => {
         const t = (time - start) / 1000;
         const progress = (time - start) / duration;
 
+        // 标准弹簧曲线（供灵动岛 Vue 容器使用）
         const spring = 1 - Math.cos(freq * t * 2 * Math.PI) * Math.exp(-decay * t);
 
         const currentW = startWidth + (targetWidth - startWidth) * spring;
         const currentH = startHeight + (targetHeight - startHeight) * spring;
 
+        // 1. 刷新 Vue 组件尺寸（内部靠 margin: 0 auto 自动物理居中）
         currentWidth.value = currentW;
         currentHeight.value = currentH;
 
+        // 2. 👇 【核心新增】计算底层 OS 窗口的“前导/滞后”特殊尺寸，完美干掉裁切
+        let windowW = currentW;
+        let windowH = currentH;
+
+        // --- 宽度边缘控制 ---
+        if (targetWidth > startWidth) {
+            // 【展开宽度】：时间乘以 1.5 倍速，让窗口边缘扩得比岛屿更快
+            const tLead = t * 1.5;
+            const springLead = 1 - Math.cos(freq * tLead * 2 * Math.PI) * Math.exp(-decay * tLead);
+            windowW = Math.max(currentW, startWidth + (targetWidth - startWidth) * springLead);
+        } else if (targetWidth < startWidth) {
+            // 【收缩宽度】：时间乘以 0.6 倍速，让窗口边缘缩得比岛屿更慢
+            const tLag = t * 0.6;
+            const springLag = 1 - Math.cos(freq * tLag * 2 * Math.PI) * Math.exp(-decay * tLag);
+            windowW = Math.max(currentW, startWidth + (targetWidth - startWidth) * springLag);
+        }
+
+        // --- 高度边缘控制 ---
+        if (targetHeight > startHeight) {
+            // 【展开高度】领先
+            const tLead = t * 1.5;
+            const springLead = 1 - Math.cos(freq * tLead * 2 * Math.PI) * Math.exp(-decay * tLead);
+            windowH = Math.max(currentH, startHeight + (targetHeight - startHeight) * springLead);
+        } else if (targetHeight < startHeight) {
+            // 【收缩高度】滞后
+            const tLag = t * 0.6;
+            const springLag = 1 - Math.cos(freq * tLag * 2 * Math.PI) * Math.exp(-decay * tLag);
+            windowH = Math.max(currentH, startHeight + (targetHeight - startHeight) * springLag);
+        }
+
+        // 3. 按照计算出的安全窗口尺寸（windowW / windowH）呼叫底层同步
         if (time - lastIpcTime > 16) {
-            const currentLeftX = Math.round(centerPhysicalX - (currentW * dpr) / 2);
+            const currentLeftX = Math.round(centerPhysicalX - (windowW * dpr) / 2);
             appWindow.setPosition(new PhysicalPosition(currentLeftX, originPhysicalY)).catch(() => { });
-            appWindow.setSize(new PhysicalSize(Math.ceil(currentW * dpr), Math.ceil(currentH * dpr))).catch(() => { });
+            appWindow.setSize(new PhysicalSize(Math.ceil(windowW * dpr), Math.ceil(windowH * dpr))).catch(() => { });
 
             trackedPhysicalX = currentLeftX;
             lastIpcTime = time;
@@ -834,7 +867,7 @@ const animateIslandSize = (targetWidth: number, targetHeight: number) => {
         if (progress < 1) {
             sizeAnimId = requestAnimationFrame(run);
         } else {
-            // 4️⃣ 动画彻底结束，清空 ID，表示回到“静止状态”
+            // 动画彻底收尾，精准归位
             sizeAnimId = 0;
             currentWidth.value = targetWidth;
             currentHeight.value = targetHeight;
@@ -1193,7 +1226,7 @@ onUnmounted(() => {
     -webkit-user-select: none;
     overflow: hidden;
     background: transparent;
-    transition: background 0.4s ease, border-radius 0.3s ease;
+    transition: background 0.4s ease, border-radius 0.15s ease;
     box-sizing: border-box;
 }
 
@@ -1231,7 +1264,7 @@ onUnmounted(() => {
     justify-content: space-between;
     padding: 0 14px;
     overflow: hidden;
-    transition: border-radius 0.3s ease;
+    transition: border-radius 0.15s ease;
 }
 
 /* 4. 顺时针匀速旋转 */

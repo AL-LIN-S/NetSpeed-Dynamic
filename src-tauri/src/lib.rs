@@ -603,6 +603,26 @@ fn get_hardware_stats(state: State<'_, AppState>) -> (f32, u64, u64) {
     (sys.global_cpu_info().cpu_usage(), sys.used_memory(), sys.total_memory())
 }
 
+// 获取用户最后一次键鼠输入至今的闲置秒数（用于久坐检测）
+#[tauri::command]
+fn get_idle_seconds() -> u64 {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use winapi::um::winuser::{GetLastInputInfo, LASTINPUTINFO};
+        use winapi::um::sysinfoapi::GetTickCount;
+        let mut lii: LASTINPUTINFO = std::mem::zeroed();
+        lii.cbSize = std::mem::size_of::<LASTINPUTINFO>() as u32;
+        if GetLastInputInfo(&mut lii) != 0 {
+            // GetTickCount 与 LASTINPUTINFO.dwTime 同基准（系统启动毫秒），wrapping_sub 处理 u32 回绕
+            let elapsed_ms = GetTickCount().wrapping_sub(lii.dwTime);
+            return (elapsed_ms / 1000) as u64;
+        }
+        0
+    }
+    #[cfg(not(target_os = "windows"))]
+    { 0 }
+}
+
 #[tauri::command]
 fn get_network_stats(state: State<'_, AppState>) -> (u64, u64) {
     let mut networks = state.networks.lock().unwrap();
@@ -680,6 +700,7 @@ pub fn run() {
         .manage(AppState { networks: Mutex::new(networks), system: Mutex::new(system) })
         .invoke_handler(tauri::generate_handler![
             get_network_stats,
+            get_idle_seconds,
             is_widget_visible,
             get_network_latency,
             fetch_netease_music_info,

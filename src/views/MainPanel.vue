@@ -290,6 +290,28 @@
                             <button class="pm-btn pm-reset" @click="pomodoroAction('reset')">重置</button>
                         </div>
                     </div>
+
+                    <div class="set-item">
+                        <div class="set-item-meta">
+                            <span class="set-item-title">久坐提醒 <p class="set-item-pro-tag">NEW</p></span>
+                            <span class="set-item-desc">连续在座 45 分钟后提醒起身（离开座位自动重置）</span>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" v-model="enableSitRemind" @change="toggleSitRemind">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+
+                    <div class="set-item">
+                        <div class="set-item-meta">
+                            <span class="set-item-title">喝水提醒 <p class="set-item-pro-tag">NEW</p></span>
+                            <span class="set-item-desc">每隔 30 分钟提醒喝水</span>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" v-model="enableWaterRemind" @change="toggleWaterRemind">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
                 </div>
             </template>
         </div>
@@ -424,6 +446,18 @@ const togglePomodoro = async () => {
 
 const pomodoroAction = async (action: 'start' | 'pause' | 'reset' | 'skip') => {
     await emit('pomodoro-action', { action });
+};
+
+// --- 久坐 / 喝水健康提醒 ---
+const enableSitRemind = ref(localStorage.getItem('nsd_sit_remind') === 'true');
+const enableWaterRemind = ref(localStorage.getItem('nsd_water_remind') === 'true');
+const toggleSitRemind = async () => {
+    localStorage.setItem('nsd_sit_remind', String(enableSitRemind.value));
+    await emit('control-sit-remind', { enabled: enableSitRemind.value });
+};
+const toggleWaterRemind = async () => {
+    localStorage.setItem('nsd_water_remind', String(enableWaterRemind.value));
+    await emit('control-water-remind', { enabled: enableWaterRemind.value });
 };
 
 // 置于任务栏状态，默认从本地存储读取

@@ -119,6 +119,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, currentMonitor, PhysicalPosition, LogicalPosition, PhysicalSize } from '@tauri-apps/api/window'; import { Menu, MenuItem } from '@tauri-apps/api/menu';
 import { listen, emit } from '@tauri-apps/api/event';
 import { usePomodoro } from '../composables/usePomodoro';
+import { useHealthReminders } from '../composables/useHealthReminders';
 
 // 番茄钟（模块级单例，跨窗口通过 localStorage + Tauri event 同步状态）
 const pomodoro = usePomodoro();
@@ -126,7 +127,11 @@ const pomodoroText = pomodoro.remainingText;       // mm:ss 文本
 const pomodoroColor = pomodoro.badgeColor;          // 阶段颜色
 const pomodoroActive = computed(() => pomodoro.phase.value !== 'idle');
 const isPomodoroEnabled = ref(localStorage.getItem('nsd_pomodoro') === 'true');
-let pomodoroReminderTimer: number | null = null;
+
+// 健康提醒（久坐/喝水）
+const health = useHealthReminders();
+const isSitRemindEnabled = ref(localStorage.getItem('nsd_sit_remind') === 'true');
+const isWaterRemindEnabled = ref(localStorage.getItem('nsd_water_remind') === 'true');
 
 const isIslandVisible = ref(false);
 const isMenuOpen = ref(false);
@@ -760,8 +765,9 @@ const animateIslandSize = async (targetWidth: number, targetHeight: number) => {
     }
 };
 
-// 番茄钟阶段切换提醒：复用消息卡片通道，全岛短暂弹出 3.5s 后收回
-const showPomodoroReminder = (reminder: { title: string; body: string; color: string }) => {
+// 通用岛内提醒：番茄钟/健康提醒共用，复用消息卡片通道，全岛短暂弹出 3.5s 后收回
+let reminderTimer: number | null = null;
+const showIslandReminder = (reminder: { title: string; body: string; color: string }, clearer: () => void) => {
     msgTitle.value = reminder.title;
     msgBody.value = reminder.body;
     currentMsgIcon.value = defaultLogo;
@@ -777,20 +783,25 @@ const showPomodoroReminder = (reminder: { title: string; body: string; color: st
         }
     }
 
-    if (pomodoroReminderTimer) clearTimeout(pomodoroReminderTimer);
-    pomodoroReminderTimer = window.setTimeout(() => {
+    if (reminderTimer) clearTimeout(reminderTimer);
+    reminderTimer = window.setTimeout(() => {
         isMsgActive.value = false;
         if (!isPinnedToTaskbar.value) animateIslandSize(260, 42);
         if (isMsgModeEnabled.value) {
             setTimeout(() => { if (!isMsgActive.value) isIslandVisible.value = false; }, 600);
         }
-        pomodoro.clearReminder();
+        clearer();
     }, 3500);
 };
 
 // 监听番茄钟触发的阶段切换提醒
 watch(() => pomodoro.currentReminder.value, (r) => {
-    if (r) showPomodoroReminder(r);
+    if (r) showIslandReminder(r, pomodoro.clearReminder);
+});
+
+// 监听健康提醒（久坐/喝水）
+watch(() => health.currentReminder.value, (r) => {
+    if (r) showIslandReminder(r, health.clearReminder);
 });
 
 // 记录音乐岛是否处于展开状态
@@ -999,6 +1010,17 @@ onMounted(async () => {
         else if (a === 'skip') pomodoro.skip();
     });
 
+    // 健康提醒：按本地开关初始化，并监听控制台开关变化
+    health.configure(isSitRemindEnabled.value, isWaterRemindEnabled.value);
+    await listen<{ enabled: boolean }>('control-sit-remind', (event) => {
+        isSitRemindEnabled.value = event.payload.enabled;
+        health.configure(isSitRemindEnabled.value, isWaterRemindEnabled.value);
+    });
+    await listen<{ enabled: boolean }>('control-water-remind', (event) => {
+        isWaterRemindEnabled.value = event.payload.enabled;
+        health.configure(isSitRemindEnabled.value, isWaterRemindEnabled.value);
+    });
+
     fetchSpeedStats();
     checkNetworkLatency();
 
@@ -1193,9 +1215,9 @@ onUnmounted(() => {
     align-items: center;
     gap: 4px;
     font-size: 12px;
-    font-weight: 700;
+    font-weight: bold;
     font-variant-numeric: tabular-nums;
-    letter-spacing: 0.5px;
+    letter-spacing: -0.2px;
     white-space: nowrap;
 }
 

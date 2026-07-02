@@ -7,11 +7,6 @@
 
             <div class="rainbow-border-glow" v-if="isGlowBorderEnabled" :style="{ opacity: glowOpacity }"></div>
 
-            <!-- 统一角标插槽：番茄钟/久坐/喝水等迷你倒计时，按优先级排队显示 -->
-            <div v-if="activeBadge" class="badge-slot" :style="{ color: activeBadge.color }">
-                {{ activeBadge.text }}
-            </div>
-
             <div class="island-core-content" :style="coreContentStyle">
                 <div class="inner-wrapper">
                     <transition mode="out-in" @enter="onInnerEnter" @leave="onInnerLeave" :css="false">
@@ -105,6 +100,12 @@
                         <span class="bar"></span>
                     </div>
 
+                    <div v-else-if="pomodoroActive" class="pomodoro-inline"
+                        :style="{ color: pomodoroColor }" :key="'pomo'">
+                        <span class="pomodoro-dot" :style="{ background: pomodoroColor }"></span>
+                        {{ pomodoroText }}
+                    </div>
+
                     <div v-else :class="['status-dot', networkStatus]" key="dot"></div>
                 </transition>
             </div>
@@ -118,11 +119,12 @@ import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, currentMonitor, PhysicalPosition, LogicalPosition, PhysicalSize } from '@tauri-apps/api/window'; import { Menu, MenuItem } from '@tauri-apps/api/menu';
 import { listen, emit } from '@tauri-apps/api/event';
 import { usePomodoro } from '../composables/usePomodoro';
-import { useBadge } from '../composables/useBadge';
 
-// 番茄钟与统一角标插槽（模块级单例，跨窗口通过 localStorage + Tauri event 同步状态）
+// 番茄钟（模块级单例，跨窗口通过 localStorage + Tauri event 同步状态）
 const pomodoro = usePomodoro();
-const { activeBadge } = useBadge();
+const pomodoroText = pomodoro.remainingText;       // mm:ss 文本
+const pomodoroColor = pomodoro.badgeColor;          // 阶段颜色
+const pomodoroActive = computed(() => pomodoro.phase.value !== 'idle');
 const isPomodoroEnabled = ref(localStorage.getItem('nsd_pomodoro') === 'true');
 let pomodoroReminderTimer: number | null = null;
 
@@ -1185,26 +1187,23 @@ onUnmounted(() => {
 }
 
 /* 3. 核心遮罩内容块：挡在旋转渐变层的上方 */
-/* 统一角标插槽：迷你倒计时，绝对定位在岛屿右上角外侧 */
-.badge-slot {
-    position: absolute;
-    top: -10px;
-    right: 6px;
-    z-index: 5;
-    padding: 1px 7px;
-    min-width: 16px;
-    height: 18px;
-    line-height: 16px;
-    font-size: 11px;
-    font-weight: 600;
+/* 番茄钟岛内倒计时：显示在岛屿右侧（与状态点同一位置，二选一） */
+.pomodoro-inline {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    font-weight: 700;
     font-variant-numeric: tabular-nums;
-    text-align: center;
-    background: #1a1a1a;
-    color: #fff;
-    border-radius: 9px;
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
-    pointer-events: none;
+    letter-spacing: 0.5px;
     white-space: nowrap;
+}
+
+.pomodoro-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
 }
 
 .island-core-content {

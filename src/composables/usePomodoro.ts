@@ -1,5 +1,4 @@
-import { ref, computed, onUnmounted, watch } from 'vue';
-import { useBadge } from './useBadge';
+import { ref, computed, onUnmounted } from 'vue';
 
 /**
  * 番茄钟状态机——经典四阶段循环
@@ -9,7 +8,7 @@ import { useBadge } from './useBadge';
  * - 用 phaseEndsAt 时间戳校准，而非纯秒计数，避免休眠/后台漂移
  * - localStorage 持久化，窗口重开/崩溃可恢复
  * - 阶段结束自动衔接下一阶段（autostart），并触发 reminder 给灵动岛做全岛弹出
- * - 通过 useBadge 在网速岛右上角挂倒计时角标
+ * - 暴露 remainingText / badgeColor，由灵动岛在岛内显示倒计时
  */
 
 export type PomodoroPhase = 'focus' | 'short' | 'long' | 'idle';
@@ -161,8 +160,6 @@ function stopTick() {
 }
 
 export function usePomodoro() {
-    const { setBadge, removeBadge } = useBadge();
-
     const remainingText = computed(() => {
         const total = remaining.value;
         const m = Math.floor(total / 60).toString().padStart(2, '0');
@@ -172,35 +169,7 @@ export function usePomodoro() {
 
     const badgeColor = computed(() => {
         if (phase.value === 'idle') return '#868e96';
-        return PHASE_META[phase.value as Exclude<PomodoroPhase, 'idle'>].color;
-    });
-
-    // 同步角标：运行中（含暂停的 idle 外阶段）挂角标
-    watch([phase, isRunning], ([p, running]) => {
-        if (p !== 'idle') {
-            const meta = PHASE_META[p as Exclude<PomodoroPhase, 'idle'>];
-            setBadge({
-                id: 'pomodoro',
-                text: remainingText.value,
-                color: running ? meta.color : '#868e96',
-                priority: meta.priority,
-            });
-        } else {
-            removeBadge('pomodoro');
-        }
-    }, { immediate: true });
-
-    // remaining 变化时同步角标文本
-    watch(remainingText, (txt) => {
-        if (phase.value !== 'idle') {
-            const meta = PHASE_META[phase.value as Exclude<PomodoroPhase, 'idle'>];
-            setBadge({
-                id: 'pomodoro',
-                text: txt,
-                color: isRunning.value ? meta.color : '#868e96',
-                priority: meta.priority,
-            });
-        }
+        return PHASE_META[phase.value].color;
     });
 
     function start() {
@@ -231,7 +200,6 @@ export function usePomodoro() {
         phaseEndsAt.value = null;
         currentReminder.value = null;
         stopTick();
-        removeBadge('pomodoro');
         localStorage.removeItem(STATE_KEY);
     }
 

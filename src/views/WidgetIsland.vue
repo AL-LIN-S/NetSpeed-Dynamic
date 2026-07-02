@@ -7,6 +7,11 @@
 
             <div class="rainbow-border-glow" v-if="isGlowBorderEnabled" :style="{ opacity: glowOpacity }"></div>
 
+            <!-- 统一角标插槽：番茄钟/久坐/喝水等迷你倒计时，按优先级排队显示 -->
+            <div v-if="activeBadge" class="badge-slot" :style="{ color: activeBadge.color }">
+                {{ activeBadge.text }}
+            </div>
+
             <div class="island-core-content" :style="coreContentStyle">
                 <div class="inner-wrapper">
                     <transition mode="out-in" @enter="onInnerEnter" @leave="onInnerLeave" :css="false">
@@ -112,6 +117,14 @@ import { ref, onMounted, onUnmounted, computed, watch, type CSSProperties } from
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, currentMonitor, PhysicalPosition, LogicalPosition, PhysicalSize } from '@tauri-apps/api/window'; import { Menu, MenuItem } from '@tauri-apps/api/menu';
 import { listen, emit } from '@tauri-apps/api/event';
+import { usePomodoro } from '../composables/usePomodoro';
+import { useBadge } from '../composables/useBadge';
+
+// 番茄钟与统一角标插槽（模块级单例，跨窗口通过 localStorage + Tauri event 同步状态）
+const pomodoro = usePomodoro();
+const { activeBadge } = useBadge();
+const isPomodoroEnabled = ref(localStorage.getItem('nsd_pomodoro') === 'true');
+let pomodoroReminderTimer: number | null = null;
 
 const isIslandVisible = ref(false);
 const isMenuOpen = ref(false);
@@ -745,6 +758,39 @@ const animateIslandSize = async (targetWidth: number, targetHeight: number) => {
     }
 };
 
+// 番茄钟阶段切换提醒：复用消息卡片通道，全岛短暂弹出 3.5s 后收回
+const showPomodoroReminder = (reminder: { title: string; body: string; color: string }) => {
+    msgTitle.value = reminder.title;
+    msgBody.value = reminder.body;
+    currentMsgIcon.value = defaultLogo;
+
+    if (!isMsgActive.value) {
+        isMsgActive.value = true;
+        if (isMsgModeEnabled.value && !isIslandVisible.value) {
+            getCurrentWindow().show();
+            isIslandVisible.value = true;
+        }
+        if (!isPinnedToTaskbar.value) {
+            animateIslandSize(360, 65);
+        }
+    }
+
+    if (pomodoroReminderTimer) clearTimeout(pomodoroReminderTimer);
+    pomodoroReminderTimer = window.setTimeout(() => {
+        isMsgActive.value = false;
+        if (!isPinnedToTaskbar.value) animateIslandSize(260, 42);
+        if (isMsgModeEnabled.value) {
+            setTimeout(() => { if (!isMsgActive.value) isIslandVisible.value = false; }, 600);
+        }
+        pomodoro.clearReminder();
+    }, 3500);
+};
+
+// 监听番茄钟触发的阶段切换提醒
+watch(() => pomodoro.currentReminder.value, (r) => {
+    if (r) showPomodoroReminder(r);
+});
+
 // 记录音乐岛是否处于展开状态
 const isMusicExpanded = ref(false);
 let musicExpandTimer: number | null = null;
@@ -925,6 +971,30 @@ onMounted(async () => {
     // 监听来自控制台的系统硬件监控开关
     await listen<{ enabled: boolean }>('control-hardware-mon', (event) => {
         isHardwareMonEnabled.value = event.payload.enabled;
+    });
+
+    // 番茄钟：若开关已开，恢复上次未完成的计时
+    if (isPomodoroEnabled.value) {
+        pomodoro.restore();
+    }
+
+    // 监听控制台的番茄钟开关变化
+    await listen<{ enabled: boolean }>('control-pomodoro', (event) => {
+        isPomodoroEnabled.value = event.payload.enabled;
+        if (event.payload.enabled) {
+            pomodoro.restore();
+        } else {
+            pomodoro.reset();
+        }
+    });
+
+    // 监听控制台的番茄钟控制指令（开始/暂停/重置/跳过）
+    await listen<{ action: 'start' | 'pause' | 'reset' | 'skip' }>('pomodoro-action', (event) => {
+        const a = event.payload.action;
+        if (a === 'start') pomodoro.start();
+        else if (a === 'pause') pomodoro.pause();
+        else if (a === 'reset') pomodoro.reset();
+        else if (a === 'skip') pomodoro.skip();
     });
 
     fetchSpeedStats();
@@ -1115,6 +1185,28 @@ onUnmounted(() => {
 }
 
 /* 3. 核心遮罩内容块：挡在旋转渐变层的上方 */
+/* 统一角标插槽：迷你倒计时，绝对定位在岛屿右上角外侧 */
+.badge-slot {
+    position: absolute;
+    top: -10px;
+    right: 6px;
+    z-index: 5;
+    padding: 1px 7px;
+    min-width: 16px;
+    height: 18px;
+    line-height: 16px;
+    font-size: 11px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    background: #1a1a1a;
+    color: #fff;
+    border-radius: 9px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+    white-space: nowrap;
+}
+
 .island-core-content {
     position: relative;
     z-index: 2;

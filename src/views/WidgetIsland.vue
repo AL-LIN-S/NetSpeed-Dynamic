@@ -729,6 +729,8 @@ const msgBody = ref('');
 const msgAumid = ref('');
 // 通知监听权限未授权时仅提示一次的标志
 let notifPermissionWarned = false;
+// 微信未读数防抖：仅 0→N 时弹一次提醒，N→N+1 不重复弹
+let lastWechatUnread = 0;
 
 // 👇把里面的 app_name 改回 appName
 const handleMsgClick = async () => {
@@ -862,6 +864,7 @@ watch(displayMusic, (newVal: boolean) => {
 
 // 引入你的默认图标作为兜底
 import defaultLogo from '../assets/logo.png';
+import wechatIcon from '../assets/wechat.png';
 const currentMsgIcon = ref(defaultLogo);
 
 // 极简版图标映射器 (你可以随时去 iconfont 找喜欢的图标放进 assets)
@@ -1058,6 +1061,36 @@ onMounted(async () => {
     }, 2000);
 
 
+    // 统一的"消息到达"展示：系统 Toast / 微信未读共用，5 秒后自动收回
+    const pushIslandMessage = (title: string, body: string, icon: any, aumid = '') => {
+        msgTitle.value = title;
+        msgBody.value = body;
+        msgAumid.value = aumid;
+        currentMsgIcon.value = icon;
+
+        if (!isMsgActive.value) {
+            isMsgActive.value = true;
+            if (isMsgModeEnabled.value && !isIslandVisible.value) {
+                getCurrentWindow().show();
+                isIslandVisible.value = true;
+            }
+            if (!isPinnedToTaskbar.value) {
+                animateIslandSize(360, 65);
+            }
+        }
+
+        if ((window as any).msgTimer) clearTimeout((window as any).msgTimer);
+        (window as any).msgTimer = setTimeout(() => {
+            isMsgActive.value = false;
+            animateIslandSize(260, 42);
+            if (isMsgModeEnabled.value) {
+                setTimeout(() => {
+                    if (!isMsgActive.value) isIslandVisible.value = false;
+                }, 600);
+            }
+        }, 5000);
+    };
+
     // 3. 低频定时器：专门轮询系统通知（通知不需要抢时间，2.5秒换来极低的资源占用）
     notifyTimer = setInterval(async () => {
         const enabled = localStorage.getItem('nsd_msg_notify') === 'true';
@@ -1066,32 +1099,18 @@ onMounted(async () => {
         try {
             const res = await invoke<any>('fetch_latest_notification');
             if (res) {
-                msgTitle.value = res.app_name;
-                msgAumid.value = res.aumid;
-                msgBody.value = res.body ? `${res.title}: ${res.body}` : res.title;
-                currentMsgIcon.value = getAppIcon(res.app_name);
-
-                if (!isMsgActive.value) {
-                    isMsgActive.value = true;
-                    if (isMsgModeEnabled.value && !isIslandVisible.value) {
-                        getCurrentWindow().show();
-                        isIslandVisible.value = true;
+                // 优先级仲裁：系统 Toast（内容更具体）优先展示
+                pushIslandMessage(res.app_name, res.body ? `${res.title}: ${res.body}` : res.title, getAppIcon(res.app_name), res.aumid);
+            } else {
+                // 无系统通知时，检测微信未读数（微信不发 Toast，靠窗口标题）
+                try {
+                    const unread = await invoke<number | null>('get_wechat_unread');
+                    if (unread && unread > 0 && lastWechatUnread === 0) {
+                        // 防抖：仅 0→N（新到达）才弹，N→N+1 不重复
+                        pushIslandMessage('微信', `${unread} 条新消息`, wechatIcon);
                     }
-                    if (!isPinnedToTaskbar.value) {
-                        animateIslandSize(360, 65);
-                    }
-                }
-
-                if ((window as any).msgTimer) clearTimeout((window as any).msgTimer);
-                (window as any).msgTimer = setTimeout(() => {
-                    isMsgActive.value = false;
-                    animateIslandSize(260, 42);
-                    if (isMsgModeEnabled.value) {
-                        setTimeout(() => {
-                            if (!isMsgActive.value) isIslandVisible.value = false;
-                        }, 600);
-                    }
-                }, 5000);
+                    lastWechatUnread = unread ?? 0;
+                } catch { /* 微信检测失败静默 */ }
             }
         } catch (err) {
             // 通知监听未授权时，仅提示一次，避免每 2.5 秒刷屏

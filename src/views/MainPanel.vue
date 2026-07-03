@@ -312,6 +312,26 @@
                             <span class="slider"></span>
                         </label>
                     </div>
+
+                    <div class="set-item launcher-set">
+                        <div class="set-item-meta">
+                            <span class="set-item-title">快捷启动器 <p class="set-item-pro-tag">NEW</p></span>
+                            <span class="set-item-desc">长按灵动岛唤起列表，快速打开常用程序</span>
+                        </div>
+                    </div>
+                    <div class="launcher-list">
+                        <div v-for="(item, idx) in launcherItems" :key="idx" class="launcher-row">
+                            <span class="launcher-row-name">{{ item.name }}</span>
+                            <span class="launcher-row-target">{{ item.target }}</span>
+                            <button class="launcher-del" @click="removeLauncher(idx)">删除</button>
+                        </div>
+                        <div class="launcher-add">
+                            <input class="launcher-input" v-model="newLauncherName" placeholder="名称" />
+                            <input class="launcher-input launcher-input-wide" v-model="newLauncherTarget"
+                                placeholder="路径或协议，如 C:\\app.exe 或 tencent://message/" />
+                            <button class="launcher-add-btn" @click="addLauncher">添加</button>
+                        </div>
+                    </div>
                 </div>
             </template>
         </div>
@@ -458,6 +478,32 @@ const toggleSitRemind = async () => {
 const toggleWaterRemind = async () => {
     localStorage.setItem('nsd_water_remind', String(enableWaterRemind.value));
     await emit('control-water-remind', { enabled: enableWaterRemind.value });
+};
+
+// --- 快捷启动器 ---
+interface LauncherItem { name: string; target: string; }
+const launcherItems = ref<LauncherItem[]>(JSON.parse(localStorage.getItem('nsd_launcher_items') || '[]'));
+const newLauncherName = ref('');
+const newLauncherTarget = ref('');
+
+const syncLauncher = async () => {
+    localStorage.setItem('nsd_launcher_items', JSON.stringify(launcherItems.value));
+    await emit('control-launcher-items', { items: launcherItems.value });
+};
+
+const addLauncher = () => {
+    const name = newLauncherName.value.trim();
+    const target = newLauncherTarget.value.trim();
+    if (!name || !target) return;
+    launcherItems.value.push({ name, target });
+    newLauncherName.value = '';
+    newLauncherTarget.value = '';
+    syncLauncher();
+};
+
+const removeLauncher = (idx: number) => {
+    launcherItems.value.splice(idx, 1);
+    syncLauncher();
 };
 
 // 置于任务栏状态，默认从本地存储读取
@@ -2167,5 +2213,80 @@ input:disabled+.slider {
 .pm-btn.pm-reset {
     flex: 0.7;
     background: #444;
+}
+
+/* 快捷启动器管理 */
+.launcher-set {
+    margin-bottom: 0;
+}
+
+.launcher-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.launcher-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
+}
+
+.launcher-row-name {
+    font-size: 12px;
+    font-weight: 600;
+    min-width: 50px;
+}
+
+.launcher-row-target {
+    flex: 1;
+    font-size: 11px;
+    color: #888;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.launcher-del {
+    font-size: 11px;
+    padding: 3px 8px;
+    background: #444;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.launcher-add {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.launcher-input {
+    flex: 0.5;
+    padding: 6px 8px;
+    font-size: 12px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 6px;
+    color: #fff;
+}
+
+.launcher-input-wide {
+    flex: 1.5;
+}
+
+.launcher-add-btn {
+    padding: 6px 14px;
+    font-size: 12px;
+    background: #339af0;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
 }
 </style>

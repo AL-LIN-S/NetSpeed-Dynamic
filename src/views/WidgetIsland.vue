@@ -7,6 +7,17 @@
 
             <div class="rainbow-border-glow" v-if="isGlowBorderEnabled" :style="{ opacity: glowOpacity }"></div>
 
+            <!-- 快捷启动器面板：长按唤起，岛下方竖向展开 -->
+            <transition name="launcher-fade">
+                <div v-if="isLauncherOpen" class="launcher-panel" @mouseleave="isLauncherOpen = false">
+                    <div v-for="(item, idx) in launcherItems" :key="idx" class="launcher-item"
+                        @click="launchTarget(item.target)">
+                        <span class="launcher-icon">{{ item.name.charAt(0) }}</span>
+                        <span class="launcher-name">{{ item.name }}</span>
+                    </div>
+                </div>
+            </transition>
+
             <div class="island-core-content" :style="coreContentStyle">
                 <div class="inner-wrapper">
                     <transition mode="out-in" @enter="onInnerEnter" @leave="onInnerLeave" :css="false">
@@ -562,20 +573,45 @@ let mouseDownX = 0;
 let mouseDownY = 0;
 let isMouseDown = false;
 
-const handleMouseDown = (event: MouseEvent) => {
-    // ❌ 删掉这行！不要在这里拦截锁定状态！
-    // if (isPinnedToTaskbar.value || isPositionLocked.value) return; 
+// 快捷启动器：长按灵动岛唤起
+interface LauncherItem { name: string; target: string; }
+const launcherItems = ref<LauncherItem[]>(JSON.parse(localStorage.getItem('nsd_launcher_items') || '[]'));
+const isLauncherOpen = ref(false);
+let longPressTimer: number | null = null;
 
+const launchTarget = async (target: string) => {
+    try { await invoke('launch_exe', { target }); } catch (e) { console.error('启动失败:', e); }
+    isLauncherOpen.value = false;
+};
+
+const handleMouseDown = (event: MouseEvent) => {
     if ((event.target as HTMLElement).closest('.ctl-btn')) return;
 
-    // ✅ 无论有没有锁定，都必须老老实实记录坐标，给后面的“点击展开”提供判断依据！
     mouseDownX = event.clientX;
     mouseDownY = event.clientY;
     isMouseDown = true;
+
+    // 长按 600ms 唤起启动器（仅当配置了启动项时）
+    if (longPressTimer) clearTimeout(longPressTimer);
+    if (launcherItems.value.length > 0) {
+        longPressTimer = window.setTimeout(() => {
+            isMouseDown = false; // 抑制后续点击/拖拽
+            isLauncherOpen.value = true;
+        }, 600);
+    }
+};
+
+const cancelLongPress = () => {
+    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
 };
 
 const handleMouseMove = async (event: MouseEvent) => {
     if (!isMouseDown) return;
+
+    // 移动超过阈值即取消长按（视为拖拽）
+    if (Math.abs(event.clientX - mouseDownX) > 5 || Math.abs(event.clientY - mouseDownY) > 5) {
+        cancelLongPress();
+    }
 
     // ✅ 锁定位置的拦截放在这里！只禁止拖拽，绝不影响点击！
     if (isPinnedToTaskbar.value || isPositionLocked.value) return;
@@ -591,6 +627,7 @@ const handleMouseMove = async (event: MouseEvent) => {
 };
 
 const handleMouseUp = () => {
+    cancelLongPress();
     isMouseDown = false;
 };
 
@@ -1021,6 +1058,11 @@ onMounted(async () => {
         health.configure(isSitRemindEnabled.value, isWaterRemindEnabled.value);
     });
 
+    // 监听控制台的启动器列表更新
+    await listen<{ items: LauncherItem[] }>('control-launcher-items', (event) => {
+        launcherItems.value = event.payload.items;
+    });
+
     fetchSpeedStats();
     checkNetworkLatency();
 
@@ -1232,6 +1274,65 @@ onUnmounted(() => {
     height: 6px;
     border-radius: 50%;
     flex-shrink: 0;
+}
+
+/* 快捷启动器面板 */
+.launcher-panel {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 20;
+    min-width: 140px;
+    padding: 6px;
+    background: rgba(20, 20, 20, 0.95);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.launcher-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.launcher-item:hover {
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.launcher-icon {
+    width: 22px;
+    height: 22px;
+    line-height: 22px;
+    text-align: center;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.15);
+    font-size: 12px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.launcher-name {
+    font-size: 12px;
+    color: #fff;
+    white-space: nowrap;
+}
+
+.launcher-fade-enter-active,
+.launcher-fade-leave-active {
+    transition: opacity 0.15s, transform 0.15s;
+}
+
+.launcher-fade-enter-from,
+.launcher-fade-leave-to {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-6px);
 }
 
 .island-core-content {

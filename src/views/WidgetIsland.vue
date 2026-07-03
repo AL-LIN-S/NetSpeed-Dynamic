@@ -729,8 +729,6 @@ const msgBody = ref('');
 const msgAumid = ref('');
 // 通知监听权限未授权时仅提示一次的标志
 let notifPermissionWarned = false;
-// 微信未读数防抖：仅 0→N 时弹一次提醒，N→N+1 不重复弹
-let lastWechatUnread = 0;
 
 // 👇把里面的 app_name 改回 appName
 const handleMsgClick = async () => {
@@ -864,7 +862,6 @@ watch(displayMusic, (newVal: boolean) => {
 
 // 引入你的默认图标作为兜底
 import defaultLogo from '../assets/logo.png';
-import wechatIcon from '../assets/wechat.png';
 const currentMsgIcon = ref(defaultLogo);
 
 // 极简版图标映射器 (你可以随时去 iconfont 找喜欢的图标放进 assets)
@@ -1099,18 +1096,8 @@ onMounted(async () => {
         try {
             const res = await invoke<any>('fetch_latest_notification');
             if (res) {
-                // 优先级仲裁：系统 Toast（内容更具体）优先展示
+                // 系统通知（QQ 等应用的 Toast）展示
                 pushIslandMessage(res.app_name, res.body ? `${res.title}: ${res.body}` : res.title, getAppIcon(res.app_name), res.aumid);
-            } else {
-                // 无系统通知时，检测微信未读数（微信不发 Toast，靠窗口标题）
-                try {
-                    const unread = await invoke<number | null>('get_wechat_unread');
-                    if (unread && unread > 0 && lastWechatUnread === 0) {
-                        // 防抖：仅 0→N（新到达）才弹，N→N+1 不重复
-                        pushIslandMessage('微信', `${unread} 条新消息`, wechatIcon);
-                    }
-                    lastWechatUnread = unread ?? 0;
-                } catch { /* 微信检测失败静默 */ }
             }
         } catch (err) {
             // 通知监听未授权时，仅提示一次，避免每 2.5 秒刷屏

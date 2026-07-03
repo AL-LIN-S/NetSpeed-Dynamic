@@ -424,46 +424,6 @@ fn open_app_by_aumid(aumid: String, app_name: String) {
     }
 }
 
-// 检测微信 PC 版未读消息数：枚举顶层窗口，匹配标题 "微信" / "微信(N)"，提取括号内未读数
-// 微信不发系统 Toast，故用窗口标题检测。返回 None 表示微信未运行，Some(0) 表示无未读
-#[tauri::command]
-fn get_wechat_unread() -> Option<u32> {
-    #[cfg(target_os = "windows")]
-    {
-        use winapi::shared::minwindef::{BOOL, FALSE, TRUE, LPARAM};
-        use winapi::shared::windef::HWND;
-        use winapi::um::winuser::{EnumWindows, GetWindowTextW};
-
-        // sentinel：u32::MAX 表示枚举完未找到微信窗口
-        static FOUND: AtomicU32 = AtomicU32::new(u32::MAX);
-
-        unsafe extern "system" fn proc(hwnd: HWND, _: LPARAM) -> BOOL {
-            let mut buf = [0u16; 256];
-            let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
-            if len > 0 {
-                let title = String::from_utf16_lossy(&buf[..len as usize]);
-                if title.starts_with("微信") {
-                    // "微信(3)" → 3；纯 "微信" → 0
-                    let n = title.find('(')
-                        .and_then(|s| title[s + 1..].split(')').next())
-                        .and_then(|x| x.parse::<u32>().ok())
-                        .unwrap_or(0);
-                    FOUND.store(n, Ordering::SeqCst);
-                    return FALSE; // 找到即停止枚举
-                }
-            }
-            TRUE // 继续枚举
-        }
-
-        FOUND.store(u32::MAX, Ordering::SeqCst);
-        unsafe { EnumWindows(Some(proc), 0isize); }
-        let v = FOUND.load(Ordering::SeqCst);
-        if v == u32::MAX { None } else { Some(v) }
-    }
-    #[cfg(not(target_os = "windows"))]
-    None
-}
-
 #[tauri::command]
 fn force_window_topmost(app: tauri::AppHandle) {
     #[cfg(target_os = "windows")]
@@ -741,7 +701,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_network_stats,
             get_idle_seconds,
-            get_wechat_unread,
             is_widget_visible,
             get_network_latency,
             fetch_netease_music_info,

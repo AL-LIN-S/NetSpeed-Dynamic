@@ -29,12 +29,6 @@
                             </div>
                             <div class="hw-divider"></div>
                             <div class="hw-item">
-                                <span class="hw-label">GPU</span>
-                                <span class="hw-value" :class="{ 'high-usage': parseInt(gpuUsage) >= 90 }">{{ gpuUsage
-                                }}</span>
-                            </div>
-                            <div class="hw-divider"></div>
-                            <div class="hw-item">
                                 <span class="hw-label">RAM</span>
                                 <span class="hw-value" :class="{ 'high-usage': parseInt(memUsage) >= 90 }">{{ memUsage
                                 }}</span>
@@ -106,6 +100,12 @@
                         <span class="bar"></span>
                     </div>
 
+                    <div v-else-if="pomodoroActive" class="pomodoro-inline"
+                        :style="{ color: pomodoroColor }" :key="'pomo'">
+                        <span class="pomodoro-dot" :style="{ background: pomodoroColor }"></span>
+                        {{ pomodoroText }}
+                    </div>
+
                     <div v-else :class="['status-dot', networkStatus]" key="dot"></div>
                 </transition>
             </div>
@@ -118,6 +118,20 @@ import { ref, onMounted, onUnmounted, computed, watch, type CSSProperties } from
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow, currentMonitor, PhysicalPosition, LogicalPosition, PhysicalSize } from '@tauri-apps/api/window'; import { Menu, MenuItem } from '@tauri-apps/api/menu';
 import { listen, emit } from '@tauri-apps/api/event';
+import { usePomodoro } from '../composables/usePomodoro';
+import { useHealthReminders } from '../composables/useHealthReminders';
+
+// 番茄钟（模块级单例，跨窗口通过 localStorage + Tauri event 同步状态）
+const pomodoro = usePomodoro();
+const pomodoroText = pomodoro.remainingText;       // mm:ss 文本
+const pomodoroColor = pomodoro.badgeColor;          // 阶段颜色
+const pomodoroActive = computed(() => pomodoro.phase.value !== 'idle');
+const isPomodoroEnabled = ref(localStorage.getItem('nsd_pomodoro') === 'true');
+
+// 健康提醒（久坐/喝水）
+const health = useHealthReminders();
+const isSitRemindEnabled = ref(localStorage.getItem('nsd_sit_remind') === 'true');
+const isWaterRemindEnabled = ref(localStorage.getItem('nsd_water_remind') === 'true');
 
 const isIslandVisible = ref(false);
 const isMenuOpen = ref(false);
@@ -190,7 +204,6 @@ const networkStatus = ref<'good' | 'warning' | 'error'>('good');
 // 系统硬件监控相关
 const isHardwareMonEnabled = ref(localStorage.getItem('nsd_hardware_mon') === 'true');
 const cpuUsage = ref('0%');
-const gpuUsage = ref('0%');
 const memUsage = ref('0%');
 
 // 音乐控制功能开关
@@ -409,20 +422,6 @@ const fetchSpeedStats = async () => {
         lastTx = currentTx;
     } catch (error) {
         console.error('流量获取失败:', error);
-    }
-};
-
-// 修改后的获取 GPU 占用率的方法 (删除文件顶部的 import { Command } ... 报错即可消失)
-const fetchGpuUsage = async () => {
-    try {
-        // 由于不想动多个文件和安装插件，我们通过简单的原生 Fetch 或是给 GPU 一个顺应 CPU 趋势的平滑模拟值（最简单、绝不动第2个文件、且不安装插件）
-        // 如果你的 CPU 占高，GPU 往往也有一定动态，这里用一个最安全的防报错平滑值兜底，或者直接用以下逻辑：
-        const cpuNum = parseInt(cpuUsage.value) || 10;
-        const randomOffset = Math.floor(Math.random() * 5); // 稍微加一点动态随机数
-        const estimatedGpu = Math.min(Math.max(Math.round(cpuNum * 0.4) + randomOffset, 1), 99);
-        gpuUsage.value = estimatedGpu + '%';
-    } catch (e) {
-        gpuUsage.value = '0%';
     }
 };
 
@@ -728,6 +727,8 @@ const isMsgActive = ref(false);
 const msgTitle = ref('');
 const msgBody = ref('');
 const msgAumid = ref('');
+// 通知监听权限未授权时仅提示一次的标志
+let notifPermissionWarned = false;
 
 // 👇把里面的 app_name 改回 appName
 const handleMsgClick = async () => {
@@ -763,6 +764,45 @@ const animateIslandSize = async (targetWidth: number, targetHeight: number) => {
         console.error('呼叫 Rust 动画失败:', err);
     }
 };
+
+// 通用岛内提醒：番茄钟/健康提醒共用，复用消息卡片通道，全岛短暂弹出 3.5s 后收回
+let reminderTimer: number | null = null;
+const showIslandReminder = (reminder: { title: string; body: string; color: string }, clearer: () => void) => {
+    msgTitle.value = reminder.title;
+    msgBody.value = reminder.body;
+    currentMsgIcon.value = defaultLogo;
+
+    if (!isMsgActive.value) {
+        isMsgActive.value = true;
+        if (isMsgModeEnabled.value && !isIslandVisible.value) {
+            getCurrentWindow().show();
+            isIslandVisible.value = true;
+        }
+        if (!isPinnedToTaskbar.value) {
+            animateIslandSize(360, 65);
+        }
+    }
+
+    if (reminderTimer) clearTimeout(reminderTimer);
+    reminderTimer = window.setTimeout(() => {
+        isMsgActive.value = false;
+        if (!isPinnedToTaskbar.value) animateIslandSize(260, 42);
+        if (isMsgModeEnabled.value) {
+            setTimeout(() => { if (!isMsgActive.value) isIslandVisible.value = false; }, 600);
+        }
+        clearer();
+    }, 3500);
+};
+
+// 监听番茄钟触发的阶段切换提醒
+watch(() => pomodoro.currentReminder.value, (r) => {
+    if (r) showIslandReminder(r, pomodoro.clearReminder);
+});
+
+// 监听健康提醒（久坐/喝水）
+watch(() => health.currentReminder.value, (r) => {
+    if (r) showIslandReminder(r, health.clearReminder);
+});
 
 // 记录音乐岛是否处于展开状态
 const isMusicExpanded = ref(false);
@@ -946,6 +986,41 @@ onMounted(async () => {
         isHardwareMonEnabled.value = event.payload.enabled;
     });
 
+    // 番茄钟：若开关已开，恢复上次未完成的计时
+    if (isPomodoroEnabled.value) {
+        pomodoro.restore();
+    }
+
+    // 监听控制台的番茄钟开关变化
+    await listen<{ enabled: boolean }>('control-pomodoro', (event) => {
+        isPomodoroEnabled.value = event.payload.enabled;
+        if (event.payload.enabled) {
+            pomodoro.restore();
+        } else {
+            pomodoro.reset();
+        }
+    });
+
+    // 监听控制台的番茄钟控制指令（开始/暂停/重置/跳过）
+    await listen<{ action: 'start' | 'pause' | 'reset' | 'skip' }>('pomodoro-action', (event) => {
+        const a = event.payload.action;
+        if (a === 'start') pomodoro.start();
+        else if (a === 'pause') pomodoro.pause();
+        else if (a === 'reset') pomodoro.reset();
+        else if (a === 'skip') pomodoro.skip();
+    });
+
+    // 健康提醒：按本地开关初始化，并监听控制台开关变化
+    health.configure(isSitRemindEnabled.value, isWaterRemindEnabled.value);
+    await listen<{ enabled: boolean }>('control-sit-remind', (event) => {
+        isSitRemindEnabled.value = event.payload.enabled;
+        health.configure(isSitRemindEnabled.value, isWaterRemindEnabled.value);
+    });
+    await listen<{ enabled: boolean }>('control-water-remind', (event) => {
+        isWaterRemindEnabled.value = event.payload.enabled;
+        health.configure(isSitRemindEnabled.value, isWaterRemindEnabled.value);
+    });
+
     fetchSpeedStats();
     checkNetworkLatency();
 
@@ -968,7 +1043,6 @@ onMounted(async () => {
                 if (totalMem > 0) {
                     memUsage.value = Math.round((usedMem / totalMem) * 100) + '%';
                 }
-                await fetchGpuUsage();
             } catch (err) {
                 console.error('获取硬件信息失败:', err);
             }
@@ -984,6 +1058,36 @@ onMounted(async () => {
     }, 2000);
 
 
+    // 统一的"消息到达"展示：系统 Toast / 微信未读共用，5 秒后自动收回
+    const pushIslandMessage = (title: string, body: string, icon: any, aumid = '') => {
+        msgTitle.value = title;
+        msgBody.value = body;
+        msgAumid.value = aumid;
+        currentMsgIcon.value = icon;
+
+        if (!isMsgActive.value) {
+            isMsgActive.value = true;
+            if (isMsgModeEnabled.value && !isIslandVisible.value) {
+                getCurrentWindow().show();
+                isIslandVisible.value = true;
+            }
+            if (!isPinnedToTaskbar.value) {
+                animateIslandSize(360, 65);
+            }
+        }
+
+        if ((window as any).msgTimer) clearTimeout((window as any).msgTimer);
+        (window as any).msgTimer = setTimeout(() => {
+            isMsgActive.value = false;
+            animateIslandSize(260, 42);
+            if (isMsgModeEnabled.value) {
+                setTimeout(() => {
+                    if (!isMsgActive.value) isIslandVisible.value = false;
+                }, 600);
+            }
+        }, 5000);
+    };
+
     // 3. 低频定时器：专门轮询系统通知（通知不需要抢时间，2.5秒换来极低的资源占用）
     notifyTimer = setInterval(async () => {
         const enabled = localStorage.getItem('nsd_msg_notify') === 'true';
@@ -992,35 +1096,19 @@ onMounted(async () => {
         try {
             const res = await invoke<any>('fetch_latest_notification');
             if (res) {
-                msgTitle.value = res.app_name;
-                msgAumid.value = res.aumid;
-                msgBody.value = res.body ? `${res.title}: ${res.body}` : res.title;
-                currentMsgIcon.value = getAppIcon(res.app_name);
-
-                if (!isMsgActive.value) {
-                    isMsgActive.value = true;
-                    if (isMsgModeEnabled.value && !isIslandVisible.value) {
-                        getCurrentWindow().show();
-                        isIslandVisible.value = true;
-                    }
-                    if (!isPinnedToTaskbar.value) {
-                        animateIslandSize(360, 65);
-                    }
-                }
-
-                if ((window as any).msgTimer) clearTimeout((window as any).msgTimer);
-                (window as any).msgTimer = setTimeout(() => {
-                    isMsgActive.value = false;
-                    animateIslandSize(260, 42);
-                    if (isMsgModeEnabled.value) {
-                        setTimeout(() => {
-                            if (!isMsgActive.value) isIslandVisible.value = false;
-                        }, 600);
-                    }
-                }, 5000);
+                // 系统通知（QQ 等应用的 Toast）展示
+                pushIslandMessage(res.app_name, res.body ? `${res.title}: ${res.body}` : res.title, getAppIcon(res.app_name), res.aumid);
             }
         } catch (err) {
-            console.error(err);
+            // 通知监听未授权时，仅提示一次，避免每 2.5 秒刷屏
+            if (err === 'PermissionDenied') {
+                if (!notifPermissionWarned) {
+                    console.warn('[NSD] 通知监听权限未授权，请在系统设置 → 辅助功能/通知 中允许本应用读取通知');
+                    notifPermissionWarned = true;
+                }
+            } else {
+                console.error(err);
+            }
         }
     }, 2500);
 
@@ -1127,6 +1215,25 @@ onUnmounted(() => {
 }
 
 /* 3. 核心遮罩内容块：挡在旋转渐变层的上方 */
+/* 番茄钟岛内倒计时：显示在岛屿右侧（与状态点同一位置，二选一） */
+.pomodoro-inline {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    font-weight: bold;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.2px;
+    white-space: nowrap;
+}
+
+.pomodoro-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
 .island-core-content {
     position: relative;
     z-index: 2;

@@ -212,7 +212,7 @@
                     <div class="set-item" :class="{ 'disabled-set-item': enableRotation }">
                         <div class="set-item-meta">
                             <span class="set-item-title">音乐控制器 <p class="set-item-pro-tag">PRO</p></span>
-                            <span class="set-item-desc">{{ enableRotation ? '轮换开启中，已禁用' : '支持网易云音乐控制及歌曲信息显示' }}</span>
+                            <span class="set-item-desc">{{ enableRotation ? '轮换开启中，已禁用' : '支持网易云音乐控制及歌曲信息显示（需在网易云设置中开启系统媒体控制 SMTC）' }}</span>
                         </div>
                         <label class="switch">
                             <input type="checkbox" v-model="enableMusicCtrl" :disabled="enableRotation">
@@ -234,7 +234,7 @@
                     <div class="set-item" :class="{ 'disabled-set-item': enableRotation }">
                         <div class="set-item-meta">
                             <span class="set-item-title">系统硬件监控 <p class="set-item-pro-tag">PRO</p></span>
-                            <span class="set-item-desc">{{ enableRotation ? '轮换开启中，已禁用' : '显示 CPU / GPU / 内存实时占用率'
+                            <span class="set-item-desc">{{ enableRotation ? '轮换开启中，已禁用' : '显示 CPU / 内存实时占用率'
                                 }}</span>
                         </div>
                         <label class="switch">
@@ -263,6 +263,52 @@
                         </div>
                         <label class="switch">
                             <input type="checkbox" v-model="enableRotation" @change="toggleRotation">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+
+                    <div class="set-item">
+                        <div class="set-item-meta">
+                            <span class="set-item-title">番茄钟 <p class="set-item-pro-tag">NEW</p></span>
+                            <span class="set-item-desc">专注 25 / 短休 5 / 长休 15 循环，岛角实时倒计时</span>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" v-model="enablePomodoro" @change="togglePomodoro">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+
+                    <div v-if="enablePomodoro" class="set-item pomodoro-ctl">
+                        <div class="pomodoro-status">
+                            <span class="pomodoro-phase" :style="{ color: pomodoroPhaseColor }">{{ pomodoroPhaseLabel }}</span>
+                            <span class="pomodoro-time">{{ pomodoroDisplay }}</span>
+                        </div>
+                        <div class="pomodoro-buttons">
+                            <button class="pm-btn" @click="pomodoroAction('start')">开始</button>
+                            <button class="pm-btn" @click="pomodoroAction('pause')">暂停</button>
+                            <button class="pm-btn" @click="pomodoroAction('skip')">跳过</button>
+                            <button class="pm-btn pm-reset" @click="pomodoroAction('reset')">重置</button>
+                        </div>
+                    </div>
+
+                    <div class="set-item">
+                        <div class="set-item-meta">
+                            <span class="set-item-title">久坐提醒 <p class="set-item-pro-tag">NEW</p></span>
+                            <span class="set-item-desc">连续在座 45 分钟后提醒起身（离开座位自动重置）</span>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" v-model="enableSitRemind" @change="toggleSitRemind">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+
+                    <div class="set-item">
+                        <div class="set-item-meta">
+                            <span class="set-item-title">喝水提醒 <p class="set-item-pro-tag">NEW</p></span>
+                            <span class="set-item-desc">每隔 30 分钟提醒喝水</span>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" v-model="enableWaterRemind" @change="toggleWaterRemind">
                             <span class="slider"></span>
                         </label>
                     </div>
@@ -355,6 +401,64 @@ const enableHardwareMon = ref(localStorage.getItem('nsd_hardware_mon') === 'true
 const msgModeEnabled = ref(localStorage.getItem('nsd_msg_mode') === 'true');
 const enableRotation = ref(localStorage.getItem('nsd_rotation_mode') === 'true');
 let wasMusicEnabledBeforeHardware = false;
+
+// --- 番茄钟（状态机运行在 widget 窗口，控制台通过 localStorage 轮询显示 + event 下发指令）---
+const enablePomodoro = ref(localStorage.getItem('nsd_pomodoro') === 'true');
+const pomodoroPhaseLabel = ref('待机');
+const pomodoroDisplay = ref('25:00');
+const pomodoroPhaseColor = ref('#868e96');
+let pomodoroPoller: number | null = null;
+
+const PHASE_LABELS: Record<string, string> = { focus: '专注', short: '短休', long: '长休', idle: '待机' };
+const PHASE_COLORS: Record<string, string> = { focus: '#ff6b6b', short: '#51cf66', long: '#339af0', idle: '#868e96' };
+
+// 每秒从 localStorage 读取 widget 写入的状态，本地基于 phaseEndsAt 计算实时倒计时
+const pollPomodoroState = () => {
+    try {
+        const raw = localStorage.getItem('nsd_pomodoro_state');
+        if (!raw) {
+            pomodoroPhaseLabel.value = '待机';
+            pomodoroDisplay.value = '25:00';
+            pomodoroPhaseColor.value = '#868e96';
+            return;
+        }
+        const st = JSON.parse(raw) as { phase: string; isRunning: boolean; phaseEndsAt: number | null; remaining: number };
+        const phase = st.phase || 'idle';
+        pomodoroPhaseLabel.value = st.isRunning ? (PHASE_LABELS[phase] || '待机') : `暂停·${PHASE_LABELS[phase] || ''}`;
+        pomodoroPhaseColor.value = PHASE_COLORS[phase] || '#868e96';
+        let total: number;
+        if (st.isRunning && st.phaseEndsAt) {
+            total = Math.max(0, Math.ceil((st.phaseEndsAt - Date.now()) / 1000));
+        } else {
+            total = st.remaining || 0;
+        }
+        if (phase === 'idle') total = 25 * 60;
+        const m = Math.floor(total / 60).toString().padStart(2, '0');
+        const s = (total % 60).toString().padStart(2, '0');
+        pomodoroDisplay.value = `${m}:${s}`;
+    } catch { /* ignore */ }
+};
+
+const togglePomodoro = async () => {
+    localStorage.setItem('nsd_pomodoro', String(enablePomodoro.value));
+    await emit('control-pomodoro', { enabled: enablePomodoro.value });
+};
+
+const pomodoroAction = async (action: 'start' | 'pause' | 'reset' | 'skip') => {
+    await emit('pomodoro-action', { action });
+};
+
+// --- 久坐 / 喝水健康提醒 ---
+const enableSitRemind = ref(localStorage.getItem('nsd_sit_remind') === 'true');
+const enableWaterRemind = ref(localStorage.getItem('nsd_water_remind') === 'true');
+const toggleSitRemind = async () => {
+    localStorage.setItem('nsd_sit_remind', String(enableSitRemind.value));
+    await emit('control-sit-remind', { enabled: enableSitRemind.value });
+};
+const toggleWaterRemind = async () => {
+    localStorage.setItem('nsd_water_remind', String(enableWaterRemind.value));
+    await emit('control-water-remind', { enabled: enableWaterRemind.value });
+};
 
 // 置于任务栏状态，默认从本地存储读取
 const pinToTaskbar = ref(localStorage.getItem('nsd_pin_taskbar') === 'true');
@@ -893,6 +997,10 @@ onMounted(async () => {
 
     silentCheckUpdate();
 
+    // 番茄钟状态轮询：每秒刷新控制台显示
+    pollPomodoroState();
+    pomodoroPoller = window.setInterval(pollPomodoroState, 1000);
+
     window.addEventListener('contextmenu', (e) => {
         e.preventDefault();
     }, { capture: true });
@@ -954,6 +1062,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
     clearInterval(speedTimer);
+    if (pomodoroPoller) clearInterval(pomodoroPoller);
     chartInstance?.dispose();
     statsChartInstance?.dispose();
     systemThemeMedia?.removeEventListener('change', handleSystemThemeUpdate);
@@ -2006,5 +2115,57 @@ input:disabled+.slider {
 /* 当选中该平台时，让图标变亮完全不透明 */
 .capsule-btn.is-active .platform-icon {
     opacity: 1;
+}
+
+/* 番茄钟控制面板 */
+.pomodoro-ctl {
+    flex-direction: column;
+    align-items: stretch !important;
+    gap: 8px;
+    padding-top: 4px !important;
+}
+
+.pomodoro-status {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+}
+
+.pomodoro-phase {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.pomodoro-time {
+    font-size: 22px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 1px;
+}
+
+.pomodoro-buttons {
+    display: flex;
+    gap: 6px;
+}
+
+.pm-btn {
+    flex: 1;
+    padding: 6px 0;
+    font-size: 12px;
+    color: #fff;
+    background: #3a3a3a;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.pm-btn:hover {
+    background: #4a4a4a;
+}
+
+.pm-btn.pm-reset {
+    flex: 0.7;
+    background: #444;
 }
 </style>

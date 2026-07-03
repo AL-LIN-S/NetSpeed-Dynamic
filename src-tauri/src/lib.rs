@@ -275,7 +275,7 @@ async fn get_random_cover_url(song_name: String, artist_name: String) -> Result<
 
 #[tauri::command]
 async fn fetch_latest_notification() -> Result<Option<ToastData>, String> {
-    use windows::UI::Notifications::Management::UserNotificationListener;
+    use windows::UI::Notifications::Management::{UserNotificationListener, UserNotificationListenerAccessStatus};
     use windows::UI::Notifications::NotificationKinds;
 
     let listener = match UserNotificationListener::Current() {
@@ -283,7 +283,19 @@ async fn fetch_latest_notification() -> Result<Option<ToastData>, String> {
         Err(_) => return Ok(None),
     };
 
-    let _ = listener.RequestAccessAsync();
+    // 校验通知监听权限：RequestAccessAsync 返回授权状态，未授权时返回明确错误供前端提示
+    let access = match listener.RequestAccessAsync() {
+        Ok(op) => match op.get() {
+            Ok(status) => status,
+            Err(_) => return Ok(None),
+        },
+        Err(_) => return Ok(None),
+    };
+
+    if access != UserNotificationListenerAccessStatus::Allowed {
+        // Denied / Unspecified：用户未授权通知监听，前端可据此引导用户去系统设置开启
+        return Err("PermissionDenied".to_string());
+    }
 
     let notifications = match listener.GetNotificationsAsync(NotificationKinds::Toast) {
         Ok(op) => match op.get() {
@@ -351,10 +363,7 @@ async fn fetch_latest_notification() -> Result<Option<ToastData>, String> {
                             String::new()
                         };
 
-                        if title.contains("微信") || title.contains("WeChat") || body.contains("微信") || body.contains("WeChat") {
-                            return Ok(None);
-                        }
-
+                        // 微信/QQ 等应用的系统 Toast 一并放行，由前端"消息通知"开关统一控制
                         return Ok(Some(ToastData { app_name, title, body, aumid }));
                     }
                 }
@@ -591,6 +600,26 @@ fn get_hardware_stats(state: State<'_, AppState>) -> (f32, u64, u64) {
     (sys.global_cpu_info().cpu_usage(), sys.used_memory(), sys.total_memory())
 }
 
+// 获取用户最后一次键鼠输入至今的闲置秒数（用于久坐检测）
+#[tauri::command]
+fn get_idle_seconds() -> u64 {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use winapi::um::winuser::{GetLastInputInfo, LASTINPUTINFO};
+        use winapi::um::sysinfoapi::GetTickCount;
+        let mut lii: LASTINPUTINFO = std::mem::zeroed();
+        lii.cbSize = std::mem::size_of::<LASTINPUTINFO>() as u32;
+        if GetLastInputInfo(&mut lii) != 0 {
+            // GetTickCount 与 LASTINPUTINFO.dwTime 同基准（系统启动毫秒），wrapping_sub 处理 u32 回绕
+            let elapsed_ms = GetTickCount().wrapping_sub(lii.dwTime);
+            return (elapsed_ms / 1000) as u64;
+        }
+        0
+    }
+    #[cfg(not(target_os = "windows"))]
+    { 0 }
+}
+
 #[tauri::command]
 fn get_network_stats(state: State<'_, AppState>) -> (u64, u64) {
     let mut networks = state.networks.lock().unwrap();
@@ -609,13 +638,41 @@ fn get_network_stats(state: State<'_, AppState>) -> (u64, u64) {
 
 #[tauri::command]
 fn get_network_latency() -> Result<u128, String> {
-    let addr: SocketAddr = "223.5.5.5:53".parse().unwrap();
+    // 多端点并发探测：任一可达即返回最快延迟，全部超时才判定为断网
+    // 覆盖国内外，避免单一节点不可达被误判为断网
+    const ENDPOINTS: [&str; 3] = ["1.1.1.1:53", "8.8.8.8:53", "223.5.5.5:53"];
     let timeout = Duration::from_millis(1500);
 
-    let start = Instant::now();
-    match TcpStream::connect_timeout(&addr, timeout) {
-        Ok(_) => Ok(start.elapsed().as_millis()),
-        Err(_) => Err("Timeout".to_string()),
+    let handles: Vec<_> = ENDPOINTS
+        .iter()
+        .map(|ep| {
+            let ep = *ep;
+            std::thread::spawn(move || {
+                let addr: SocketAddr = ep.parse().ok()?;
+                let start = Instant::now();
+                match TcpStream::connect_timeout(&addr, timeout) {
+                    Ok(_) => Some(start.elapsed().as_millis()),
+                    Err(_) => None,
+                }
+            })
+        })
+        .collect();
+
+    let mut best: Option<u128> = None;
+    let mut any_ok = false;
+    for h in handles {
+        if let Ok(latency) = h.join() {
+            if let Some(ms) = latency {
+                any_ok = true;
+                best = Some(best.map_or(ms, |b| b.min(ms)));
+            }
+        }
+    }
+
+    if any_ok {
+        Ok(best.unwrap_or(0))
+    } else {
+        Err("Timeout".to_string())
     }
 }
 
@@ -640,6 +697,7 @@ pub fn run() {
         .manage(AppState { networks: Mutex::new(networks), system: Mutex::new(system) })
         .invoke_handler(tauri::generate_handler![
             get_network_stats,
+            get_idle_seconds,
             is_widget_visible,
             get_network_latency,
             fetch_netease_music_info,

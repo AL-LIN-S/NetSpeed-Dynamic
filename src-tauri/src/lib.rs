@@ -424,24 +424,6 @@ fn open_app_by_aumid(aumid: String, app_name: String) {
     }
 }
 
-// 快捷启动器：用 ShellExecuteW 统一打开 exe 路径或协议（tencent://、https:// 等）
-#[tauri::command]
-fn launch_exe(target: String) {
-    #[cfg(target_os = "windows")]
-    unsafe {
-        let op = std::ffi::OsStr::new("open").encode_wide().chain(Some(0)).collect::<Vec<u16>>();
-        let file = std::ffi::OsStr::new(&target).encode_wide().chain(Some(0)).collect::<Vec<u16>>();
-        ShellExecuteW(
-            std::ptr::null_mut(),
-            op.as_ptr(),
-            file.as_ptr(),
-            std::ptr::null(),
-            std::ptr::null(),
-            SW_SHOWNORMAL,
-        );
-    }
-}
-
 #[tauri::command]
 fn force_window_topmost(app: tauri::AppHandle) {
     #[cfg(target_os = "windows")]
@@ -727,7 +709,6 @@ pub fn run() {
             fetch_latest_notification,
             get_hardware_stats,
             open_app_by_aumid,
-            launch_exe,
             force_window_topmost,
             set_window_bounds,
             set_target_player,

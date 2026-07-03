@@ -212,7 +212,7 @@
                     <div class="set-item" :class="{ 'disabled-set-item': enableRotation }">
                         <div class="set-item-meta">
                             <span class="set-item-title">音乐控制器 <p class="set-item-pro-tag">PRO</p></span>
-                            <span class="set-item-desc">{{ enableRotation ? '轮换开启中，已禁用' : '支持网易云音乐控制及歌曲信息显示' }}</span>
+                            <span class="set-item-desc">{{ enableRotation ? '轮换开启中，已禁用' : '支持网易云音乐控制及歌曲信息显示（需在网易云设置中开启系统媒体控制 SMTC）' }}</span>
                         </div>
                         <label class="switch">
                             <input type="checkbox" v-model="enableMusicCtrl" :disabled="enableRotation">

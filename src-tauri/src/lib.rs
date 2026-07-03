@@ -363,10 +363,7 @@ async fn fetch_latest_notification() -> Result<Option<ToastData>, String> {
                             String::new()
                         };
 
-                        if title.contains("微信") || title.contains("WeChat") || body.contains("微信") || body.contains("WeChat") {
-                            return Ok(None);
-                        }
-
+                        // 微信/QQ 等应用的系统 Toast 一并放行，由前端"消息通知"开关统一控制
                         return Ok(Some(ToastData { app_name, title, body, aumid }));
                     }
                 }

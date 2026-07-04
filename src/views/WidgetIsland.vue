@@ -5,7 +5,12 @@
             @mouseleave="handleMouseLeave" @mouseenter="handleMouseEnter" :style="islandStyle"
             @contextmenu="handleRightClick">
 
-            <div class="rainbow-border-glow" v-if="isGlowBorderEnabled" :style="{ opacity: glowOpacity }"></div>
+            <div class="rainbow-border-glow" v-if="isGlowBorderEnabled" :style="{ opacity: glowOpacity }"
+                :class="{
+                    'glow-playing': isMusicCtlEnabled && isPlaying,
+                    'glow-paused': isMusicCtlEnabled && !isPlaying,
+                    'glow-idle': !isMusicCtlEnabled
+                }"></div>
 
             <div class="island-core-content" :style="coreContentStyle">
                 <div class="inner-wrapper">
@@ -909,6 +914,11 @@ onMounted(async () => {
         }
     });
 
+    // 监听控制台的流光边框开关
+    await listen<{ enabled: boolean }>('control-glow-border', (event) => {
+        isGlowBorderEnabled.value = event.payload.enabled;
+    });
+
     // 监听来自控制台的透明度同步指令
     await listen<{ opacity: number }>('control-island-opacity', (event) => {
         islandOpacity.value = event.payload.opacity;
@@ -1193,7 +1203,8 @@ onUnmounted(() => {
     contain: strict;
 }
 
-/* 2. 隐藏在底层的巨大旋转渐变层 */
+/* 2. 隐藏在底层的巨大旋转渐变层 —— 旋转通道：duration 由 CSS 变量驱动，默认 10s 兜底
+      音乐律动三态：glow-playing(播放加速+脉动) / glow-paused(暂停慢转+呼吸) / glow-idle(音乐关匀速) */
 .rainbow-border-glow {
     position: absolute;
     width: 500px;
@@ -1209,9 +1220,47 @@ onUnmounted(() => {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='500' height='500'%3E%3Cdefs%3E%3Cfilter id='b' x='-50%25' y='-50%25' width='200%25' height='200%25'%3E%3CfeGaussianBlur in='SourceGraphic' stdDeviation='60'/%3E%3C/filter%3E%3C/defs%3E%3Cg filter='url(%23b)'%3E%3Ccircle cx='250' cy='90' r='150' fill='%23ff3b30'/%3E%3Ccircle cx='390' cy='170' r='150' fill='%23ff9500'/%3E%3Ccircle cx='390' cy='330' r='150' fill='%234cd964'/%3E%3Ccircle cx='250' cy='410' r='150' fill='%23007aff'/%3E%3Ccircle cx='110' cy='330' r='150' fill='%235856d6'/%3E%3Ccircle cx='110' cy='170' r='150' fill='%23ff2d55'/%3E%3C/g%3E%3C/svg%3E");
     background-size: cover;
 
-    /* 10秒一圈刚刚好，柔和且不怎么吃 GPU */
-    animation: rainbow-rotate 10s linear infinite;
+    /* 旋转时长由 CSS 变量驱动：linear infinite 改 duration 不重置相位，切态无抖动 */
+    animation: rainbow-rotate var(--glow-rotate-duration, 10s) linear infinite;
     will-change: transform;
+
+    --glow-rotate-duration: 10s;
+}
+
+/* 脉动通道：伪元素复刻同一张 SVG，只跑 filter:brightness 脉动，绝不碰 transform，与父层旋转零冲突
+   idle 默认 opacity:0 不可见 = 原始匀速暗淡效果；playing/paused 由三态 class 点亮并挂脉动动画 */
+.rainbow-border-glow::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='500' height='500'%3E%3Cdefs%3E%3Cfilter id='b' x='-50%25' y='-50%25' width='200%25' height='200%25'%3E%3CfeGaussianBlur in='SourceGraphic' stdDeviation='60'/%3E%3C/filter%3E%3C/defs%3E%3Cg filter='url(%23b)'%3E%3Ccircle cx='250' cy='90' r='150' fill='%23ff3b30'/%3E%3Ccircle cx='390' cy='170' r='150' fill='%23ff9500'/%3E%3Ccircle cx='390' cy='330' r='150' fill='%234cd964'/%3E%3Ccircle cx='250' cy='410' r='150' fill='%23007aff'/%3E%3Ccircle cx='110' cy='330' r='150' fill='%235856d6'/%3E%3Ccircle cx='110' cy='170' r='150' fill='%23ff2d55'/%3E%3C/g%3E%3C/svg%3E");
+    background-size: cover;
+    will-change: filter, opacity;
+    opacity: 0;
+}
+
+/* 三态：播放加速 + 节拍脉动 */
+.rainbow-border-glow.glow-playing {
+    --glow-rotate-duration: 4s;
+}
+.rainbow-border-glow.glow-playing::after {
+    opacity: 1;
+    animation: glow-pulse-playing 1.2s ease-in-out infinite;
+}
+
+/* 三态：暂停慢转 + 缓慢呼吸 */
+.rainbow-border-glow.glow-paused {
+    --glow-rotate-duration: 24s;
+}
+.rainbow-border-glow.glow-paused::after {
+    opacity: 1;
+    animation: glow-breath 4s ease-in-out infinite;
+}
+
+/* 三态：音乐控制关 —— 匀速 10s，伪元素保持 opacity:0 无脉动（=原始效果） */
+.rainbow-border-glow.glow-idle {
+    --glow-rotate-duration: 10s;
 }
 
 /* 3. 核心遮罩内容块：挡在旋转渐变层的上方 */
@@ -1257,6 +1306,29 @@ onUnmounted(() => {
     to {
         transform: rotate(360deg);
     }
+}
+
+/* 流光律动：播放节拍脉动（明显 0.85→1.35），作用于伪元素 filter，不动 transform/opacity */
+@keyframes glow-pulse-playing {
+    0%, 100% { filter: brightness(0.85); }
+    50% { filter: brightness(1.35); }
+}
+
+/* 流光律动：暂停缓慢呼吸（柔和 0.70→1.05） */
+@keyframes glow-breath {
+    0%, 100% { filter: brightness(0.70); }
+    50% { filter: brightness(1.05); }
+}
+
+/* 无障碍：尊重 prefers-reduced-motion，关闭旋转与脉动，仅静态彩色边框，用亮度区分播放/暂停 */
+@media (prefers-reduced-motion: reduce) {
+    .rainbow-border-glow,
+    .rainbow-border-glow::after {
+        animation: none !important;
+    }
+    .rainbow-border-glow::after { opacity: 0; }
+    .rainbow-border-glow.glow-playing::after { opacity: 0.85; filter: brightness(1.05); }
+    .rainbow-border-glow.glow-paused::after { opacity: 0.7; filter: brightness(0.9); }
 }
 
 [data-tauri-drag-region] {

@@ -222,6 +222,17 @@
 
                     <div class="set-item">
                         <div class="set-item-meta">
+                            <span class="set-item-title">流光边框 <p class="set-item-pro-tag">PRO</p></span>
+                            <span class="set-item-desc">音乐律动：播放加速脉动、暂停缓慢呼吸、关闭时匀速</span>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" v-model="enableGlowBorder" @change="toggleGlowBorder">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+
+                    <div class="set-item">
+                        <div class="set-item-meta">
                             <span class="set-item-title">消息通知接收 <p class="set-item-pro-tag">PRO</p></span>
                             <span class="set-item-desc">启用系统控制中心消息弹窗提醒</span>
                         </div>
@@ -396,6 +407,7 @@ const setTargetPlayer = async (player: string) => {
 // 灵动岛设置相关的 UI 状态绑定
 const islandTheme = ref(localStorage.getItem('nsd_island_theme') || 'black');
 const enableMusicCtrl = ref(localStorage.getItem('nsd_music_ctrl') === 'true');
+const enableGlowBorder = ref(localStorage.getItem('nsd_glow_border') === 'true');
 const enableMsgNotify = ref(localStorage.getItem('nsd_msg_notify') === 'true');
 const enableHardwareMon = ref(localStorage.getItem('nsd_hardware_mon') === 'true');
 const msgModeEnabled = ref(localStorage.getItem('nsd_msg_mode') === 'true');
@@ -978,6 +990,12 @@ watch(islandTheme, async (newVal) => {
 });
 
 // 添加监听器，将状态同步给灵动岛
+// 流光边框开关：持久化 + 同步给灵动岛
+const toggleGlowBorder = async () => {
+    localStorage.setItem('nsd_glow_border', String(enableGlowBorder.value));
+    await emit('control-glow-border', { enabled: enableGlowBorder.value });
+};
+
 watch(enableMusicCtrl, async (newVal) => {
     localStorage.setItem('nsd_music_ctrl', newVal.toString());
     await emit('control-music-ctl', { enabled: newVal });

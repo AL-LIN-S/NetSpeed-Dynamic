@@ -2098,8 +2098,8 @@ input:disabled+.slider {
 /* 音乐平台六宫格样式 */
 .player-grid {
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
-    gap: 4px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
     width: 100%;
     padding: 4px;
     box-sizing: border-box;
@@ -2123,10 +2123,12 @@ input:disabled+.slider {
     height: 14px;
     object-fit: contain;
     /* 保证图标不变形 */
+    display: block;
+    /* 去除 img 默认 inline baseline 间隙，确保垂直居中对齐 */
     opacity: 0.8;
     /* 给一点点透明度，显得不那么刺眼 */
     transition: opacity 0.2s ease;
-    transform: translateX(-3px) translateY(1px);
+    transform: translateX(-2px);
     border-radius: 3px;
 }
 

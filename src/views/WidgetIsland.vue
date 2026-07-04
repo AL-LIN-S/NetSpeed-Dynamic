@@ -216,23 +216,25 @@ const isGlowBorderEnabled = ref(localStorage.getItem('nsd_glow_border') === 'tru
 
 // 真音频频谱：WASAPI 后端 emit "audio-spectrum"，驱动频谱 bar + 流光真律动
 const glowEl = ref<HTMLElement | null>(null);
-const BAR_COUNT = 12;
+const BAR_COUNT = 5;
 const barHeights = ref<number[]>(new Array(BAR_COUNT).fill(0.35));
 const barTargets = new Array(BAR_COUNT).fill(0.35);
+const barPeaks = new Array(BAR_COUNT).fill(0.001); // 每根独立自适应峰值，让低频/高频都能跳
 let glowTargetEnergy = 0;
 let glowCurrentEnergy = 0;
+let glowRunningPeak = 0.001; // 自适应归一化：慢速衰减的运行峰值
 let spectrumRaf = 0;
 
 // rAF 平滑：bar 高度和流光亮度向目标值 lerp，避免音频数据跳变
 const spectrumLoop = () => {
     for (let i = 0; i < BAR_COUNT; i++) {
         const cur = barHeights.value[i];
-        barHeights.value[i] = cur + (barTargets[i] - cur) * 0.3;
+        barHeights.value[i] = cur + (barTargets[i] - cur) * 0.35;
     }
-    glowCurrentEnergy += (glowTargetEnergy - glowCurrentEnergy) * 0.2;
+    glowCurrentEnergy += (glowTargetEnergy - glowCurrentEnergy) * 0.3;
     if (glowEl.value) {
-        // 真音频能量驱动流光亮度（覆盖 glow-playing 的固定脉动）
-        glowEl.value.style.setProperty('--glow-energy', (0.7 + glowCurrentEnergy * 1.1).toFixed(3));
+        // 真音频能量驱动流光亮度，范围 0.3~2.3，起伏对比明显
+        glowEl.value.style.setProperty('--glow-energy', (0.3 + glowCurrentEnergy * 2.0).toFixed(3));
     }
     spectrumRaf = requestAnimationFrame(spectrumLoop);
 };
@@ -955,14 +957,22 @@ onMounted(async () => {
         isGlowBorderEnabled.value = event.payload.enabled;
     });
 
-    // 真音频频谱：WASAPI 后端推送，驱动频谱 bar 高度 + 流光亮度
+    // 真音频频谱：WASAPI 后端推送，驱动频谱 bar 高度 + 流光亮度（流光关联可见频谱均值）
     await listen<{ bars: number[]; energy: number }>('audio-spectrum', (event) => {
-        const { bars, energy } = event.payload;
-        for (let i = 0; i < BAR_COUNT && i * 2 < bars.length; i++) {
-            // 后端 24 根 → 前端 12 根（每隔一根取样），映射到 scaleY 0.2~1.0
-            barTargets[i] = 0.2 + (bars[i * 2] || 0) * 0.8;
+        const { bars } = event.payload;
+        let sum = 0;
+        for (let i = 0; i < BAR_COUNT && i * 4 < bars.length; i++) {
+            const raw = bars[i * 4] || 0;
+            // 每根独立自适应归一化：低频/高频柱子都能跳动（避免右边高频静止）
+            barPeaks[i] = Math.max(raw, barPeaks[i] * 0.92);
+            const norm = Math.min(1, raw / barPeaks[i]);
+            barTargets[i] = 0.35 + norm * 0.6;
+            sum += norm;
         }
-        glowTargetEnergy = energy;
+        // 流光脉动直接关联可见频谱均值（视觉联动），自适应归一化
+        const avg = sum / BAR_COUNT;
+        glowRunningPeak = Math.max(avg, glowRunningPeak * 0.94);
+        glowTargetEnergy = Math.min(1, avg / glowRunningPeak);
     });
 
     // 初始若音乐控制已开，立即启动音频捕获

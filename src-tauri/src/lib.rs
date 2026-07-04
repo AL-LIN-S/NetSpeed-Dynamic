@@ -613,7 +613,7 @@ fn stop_audio_capture() {
 fn audio_capture_loop(app: tauri::AppHandle) {
     use windows::Win32::Media::Audio::{
         eRender, eConsole, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
-        IMMDeviceEnumerator, MMDeviceEnumerator, IAudioClient, IAudioCaptureClient,
+        IMMDeviceEnumerator, MMDeviceEnumerator, IAudioClient, IAudioCaptureClient, WAVEFORMATEX,
     };
     use windows::Win32::System::Com::{
         CoInitializeEx, CoCreateInstance, CoUninitialize, COINIT_MULTITHREADED, CLSCTX_ALL,
@@ -641,7 +641,7 @@ fn audio_capture_loop(app: tauri::AppHandle) {
         let format_ptr = match audio_client.GetMixFormat() {
             Ok(p) => p, Err(_) => { done(); return; }
         };
-        let channels = ((*format_ptr).nChannels.max(1)) as usize;
+        let channels = (std::ptr::read_unaligned(format_ptr as *const WAVEFORMATEX).nChannels.max(1)) as usize;
         if audio_client.Initialize(
             AUDCLNT_SHAREMODE_SHARED,
             AUDCLNT_STREAMFLAGS_LOOPBACK,
@@ -685,26 +685,27 @@ fn audio_capture_loop(app: tauri::AppHandle) {
             if sample_idx < FFT_SIZE { continue; }
             sample_idx = 0;
 
-            // FFT → 频谱：前 192 bin 分 24 组平均，归一化到 0~1
+            // FFT → 频谱：前 192 bin 分 24 组平均，dB 对数缩放（各频段独立起伏，不做 max 归一化）
             let spectrum = microfft::real::rfft_1024(&mut samples);
             let group = 8usize;
             let mut bars = Vec::with_capacity(BAR_COUNT);
-            let mut max_v = 0.0001f32;
             for i in 0..BAR_COUNT {
                 let mut sum = 0f32;
                 for j in 0..group {
                     let c = spectrum[i * group + j];
                     sum += ((c.re * c.re + c.im * c.im) / FFT_SIZE as f32).sqrt();
                 }
-                let v = sum / group as f32;
-                bars.push(v);
-                if v > max_v { max_v = v; }
+                let mag = sum / group as f32;
+                // dB 对数缩放：-45dB~-7dB → 0~1，压缩动态范围让起伏更明显
+                let db = 20.0 * (mag + 1e-6).log10();
+                bars.push(((db + 45.0) / 38.0).clamp(0.0, 1.0));
             }
-            for b in bars.iter_mut() { *b = (*b / max_v).min(1.0); }
-            // 总能量 RMS，放大归一化
-            let energy = (samples.iter().map(|s| s * s).sum::<f32>() / FFT_SIZE as f32).sqrt();
-            let energy_n = (energy * 8.0).min(1.0);
-            let _ = app.emit("audio-spectrum", AudioSpectrum { bars, energy: energy_n });
+            // 低频段能量（前 16 bin，鼓点/贝斯敏感，比全频 RMS 起伏剧烈）
+            let energy = (0..16).map(|i| {
+                let c = spectrum[i];
+                ((c.re * c.re + c.im * c.im) / FFT_SIZE as f32).sqrt()
+            }).sum::<f32>() / 16.0;
+            let _ = app.emit("audio-spectrum", AudioSpectrum { bars, energy });
         }
 
         let _ = audio_client.Stop();

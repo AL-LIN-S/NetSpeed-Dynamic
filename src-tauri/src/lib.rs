@@ -587,6 +587,135 @@ async fn start_island_animation(
     Ok(())
 }
 
+// --- WASAPI loopback 音频捕获 + FFT 频谱：驱动流光真律动 + 频谱可视化 ---
+static AUDIO_CAPTURE_RUNNING: AtomicBool = AtomicBool::new(false);
+
+#[derive(serde::Serialize, Clone)]
+struct AudioSpectrum {
+    bars: Vec<f32>,  // 归一化频谱幅度 0.0~1.0（24 根）
+    energy: f32,     // 归一化总能量 0.0~1.0
+}
+
+#[tauri::command]
+fn start_audio_capture(app: tauri::AppHandle) {
+    if AUDIO_CAPTURE_RUNNING.swap(true, Ordering::SeqCst) {
+        return; // 已在跑
+    }
+    std::thread::spawn(move || audio_capture_loop(app));
+}
+
+#[tauri::command]
+fn stop_audio_capture() {
+    AUDIO_CAPTURE_RUNNING.store(false, Ordering::SeqCst);
+}
+
+#[cfg(target_os = "windows")]
+fn audio_capture_loop(app: tauri::AppHandle) {
+    use windows::Win32::Media::Audio::{
+        eRender, eConsole, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+        IMMDeviceEnumerator, MMDeviceEnumerator, IAudioClient, IAudioCaptureClient,
+    };
+    use windows::Win32::System::Com::{
+        CoInitializeEx, CoCreateInstance, CoUninitialize, COINIT_MULTITHREADED, CLSCTX_ALL,
+    };
+
+    const FFT_SIZE: usize = 1024;
+    const BAR_COUNT: usize = 24;
+
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let done = || {
+            AUDIO_CAPTURE_RUNNING.store(false, Ordering::SeqCst);
+            unsafe { CoUninitialize(); }
+        };
+
+        let enumerator: IMMDeviceEnumerator = match CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) {
+            Ok(e) => e, Err(_) => { done(); return; }
+        };
+        let device = match enumerator.GetDefaultAudioEndpoint(eRender, eConsole) {
+            Ok(d) => d, Err(_) => { done(); return; }
+        };
+        let audio_client: IAudioClient = match device.Activate(CLSCTX_ALL, None) {
+            Ok(c) => c, Err(_) => { done(); return; }
+        };
+        let format_ptr = match audio_client.GetMixFormat() {
+            Ok(p) => p, Err(_) => { done(); return; }
+        };
+        let channels = ((*format_ptr).nChannels.max(1)) as usize;
+        if audio_client.Initialize(
+            AUDCLNT_SHAREMODE_SHARED,
+            AUDCLNT_STREAMFLAGS_LOOPBACK,
+            1_000_000, // 100ms (hns 单位)
+            0,
+            format_ptr as *const _,
+            None,
+        ).is_err() {
+            done(); return;
+        }
+        let capture_client: IAudioCaptureClient = match audio_client.GetService() {
+            Ok(c) => c, Err(_) => { done(); return; }
+        };
+        if audio_client.Start().is_err() { done(); return; }
+
+        let mut samples = [0f32; FFT_SIZE];
+        let mut sample_idx = 0usize;
+
+        while AUDIO_CAPTURE_RUNNING.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(33));
+            // 排空所有可用 packet，攒够一次 FFT 的样本
+            loop {
+                let packet = match capture_client.GetNextPacketSize() {
+                    Ok(p) => p, Err(_) => break,
+                };
+                if packet == 0 { break; }
+                let mut data: *mut u8 = std::ptr::null_mut();
+                let mut frames = 0u32;
+                let mut flags = 0u32;
+                if capture_client.GetBuffer(&mut data, &mut frames, &mut flags, None, None).is_err() { break; }
+                let f32_ptr = data as *const f32;
+                for f in 0..frames as usize {
+                    if sample_idx < FFT_SIZE {
+                        samples[sample_idx] = *f32_ptr.add(f * channels); // 第 0 通道
+                        sample_idx += 1;
+                    }
+                }
+                let _ = capture_client.ReleaseBuffer(frames);
+                if sample_idx >= FFT_SIZE { break; }
+            }
+            if sample_idx < FFT_SIZE { continue; }
+            sample_idx = 0;
+
+            // FFT → 频谱：前 192 bin 分 24 组平均，归一化到 0~1
+            let spectrum = microfft::real::rfft_1024(&mut samples);
+            let group = 8usize;
+            let mut bars = Vec::with_capacity(BAR_COUNT);
+            let mut max_v = 0.0001f32;
+            for i in 0..BAR_COUNT {
+                let mut sum = 0f32;
+                for j in 0..group {
+                    let c = spectrum[i * group + j];
+                    sum += ((c.re * c.re + c.im * c.im) / FFT_SIZE as f32).sqrt();
+                }
+                let v = sum / group as f32;
+                bars.push(v);
+                if v > max_v { max_v = v; }
+            }
+            for b in bars.iter_mut() { *b = (*b / max_v).min(1.0); }
+            // 总能量 RMS，放大归一化
+            let energy = (samples.iter().map(|s| s * s).sum::<f32>() / FFT_SIZE as f32).sqrt();
+            let energy_n = (energy * 8.0).min(1.0);
+            let _ = app.emit("audio-spectrum", AudioSpectrum { bars, energy: energy_n });
+        }
+
+        let _ = audio_client.Stop();
+        CoUninitialize();
+    }
+    AUDIO_CAPTURE_RUNNING.store(false, Ordering::SeqCst);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn audio_capture_loop(_app: tauri::AppHandle) {}
+
 struct AppState {
     networks: Mutex<Networks>,
     system: Mutex<System>,
@@ -698,6 +827,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_network_stats,
             get_idle_seconds,
+            start_audio_capture,
+            stop_audio_capture,
             is_widget_visible,
             get_network_latency,
             fetch_netease_music_info,

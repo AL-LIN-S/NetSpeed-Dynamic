@@ -5,7 +5,7 @@
             @mouseleave="handleMouseLeave" @mouseenter="handleMouseEnter" :style="islandStyle"
             @contextmenu="handleRightClick">
 
-            <div class="rainbow-border-glow" v-if="isGlowBorderEnabled" :style="{ opacity: glowOpacity }"
+            <div ref="glowEl" class="rainbow-border-glow" v-if="isGlowBorderEnabled" :style="{ opacity: glowOpacity }"
                 :class="{
                     'glow-playing': isMusicCtlEnabled && isPlaying,
                     'glow-paused': isMusicCtlEnabled && !isPlaying,
@@ -98,11 +98,8 @@
                 <transition mode="out-in" @enter="onInnerEnter" @leave="onInnerLeave" :css="false">
                     <div v-if="displayMusic" class="audio-spectrum"
                         :class="{ 'is-playing': isPlaying, 'expanded': isMusicExpanded }" key="spectrum">
-                        <span class="bar"></span>
-                        <span class="bar"></span>
-                        <span class="bar"></span>
-                        <span class="bar"></span>
-                        <span class="bar"></span>
+                        <span v-for="(h, i) in barHeights" :key="i" class="bar"
+                            :style="{ transform: `scaleY(${h})` }"></span>
                     </div>
 
                     <div v-else-if="pomodoroActive" class="pomodoro-inline"
@@ -216,6 +213,42 @@ const isMusicCtlEnabled = ref(localStorage.getItem('nsd_music_ctrl') === 'true')
 const isPlaying = ref(false);
 // 流光边框默认状态完全镜像音乐控制器（只要音乐控制器开着它就开，关了就一起关）
 const isGlowBorderEnabled = ref(localStorage.getItem('nsd_glow_border') === 'true');
+
+// 真音频频谱：WASAPI 后端 emit "audio-spectrum"，驱动频谱 bar + 流光真律动
+const glowEl = ref<HTMLElement | null>(null);
+const BAR_COUNT = 12;
+const barHeights = ref<number[]>(new Array(BAR_COUNT).fill(0.35));
+const barTargets = new Array(BAR_COUNT).fill(0.35);
+let glowTargetEnergy = 0;
+let glowCurrentEnergy = 0;
+let spectrumRaf = 0;
+
+// rAF 平滑：bar 高度和流光亮度向目标值 lerp，避免音频数据跳变
+const spectrumLoop = () => {
+    for (let i = 0; i < BAR_COUNT; i++) {
+        const cur = barHeights.value[i];
+        barHeights.value[i] = cur + (barTargets[i] - cur) * 0.3;
+    }
+    glowCurrentEnergy += (glowTargetEnergy - glowCurrentEnergy) * 0.2;
+    if (glowEl.value) {
+        // 真音频能量驱动流光亮度（覆盖 glow-playing 的固定脉动）
+        glowEl.value.style.setProperty('--glow-energy', (0.7 + glowCurrentEnergy * 1.1).toFixed(3));
+    }
+    spectrumRaf = requestAnimationFrame(spectrumLoop);
+};
+
+// 开启真音频捕获 + 频谱渲染；关闭时停捕获、归零
+const startSpectrum = () => {
+    if (spectrumRaf) return;
+    invoke('start_audio_capture').catch(() => { });
+    spectrumRaf = requestAnimationFrame(spectrumLoop);
+};
+const stopSpectrum = () => {
+    invoke('stop_audio_capture').catch(() => { });
+    if (spectrumRaf) { cancelAnimationFrame(spectrumRaf); spectrumRaf = 0; }
+    glowTargetEnergy = 0;
+    barTargets.fill(0.35);
+};
 
 const coverUrl = ref('');
 const coverCache = new Map<string, string>();
@@ -911,6 +944,9 @@ onMounted(async () => {
 
             showInfo.value = false;
             musicBoxKey.value++;
+            startSpectrum();
+        } else {
+            stopSpectrum();
         }
     });
 
@@ -918,6 +954,19 @@ onMounted(async () => {
     await listen<{ enabled: boolean }>('control-glow-border', (event) => {
         isGlowBorderEnabled.value = event.payload.enabled;
     });
+
+    // 真音频频谱：WASAPI 后端推送，驱动频谱 bar 高度 + 流光亮度
+    await listen<{ bars: number[]; energy: number }>('audio-spectrum', (event) => {
+        const { bars, energy } = event.payload;
+        for (let i = 0; i < BAR_COUNT && i * 2 < bars.length; i++) {
+            // 后端 24 根 → 前端 12 根（每隔一根取样），映射到 scaleY 0.2~1.0
+            barTargets[i] = 0.2 + (bars[i * 2] || 0) * 0.8;
+        }
+        glowTargetEnergy = energy;
+    });
+
+    // 初始若音乐控制已开，立即启动音频捕获
+    if (isMusicCtlEnabled.value) startSpectrum();
 
     // 监听来自控制台的透明度同步指令
     await listen<{ opacity: number }>('control-island-opacity', (event) => {
@@ -1156,6 +1205,7 @@ onUnmounted(() => {
     stopRotation();
     clearInterval(musicTimer);
     clearInterval(notifyTimer);
+    stopSpectrum();
 });
 </script>
 
@@ -1240,13 +1290,14 @@ onUnmounted(() => {
     opacity: 0;
 }
 
-/* 三态：播放加速 + 节拍脉动 */
+/* 三态：播放加速 —— 旋转 4s；脉动由真音频能量驱动（JS 设 --glow-energy 变量，rAF 平滑） */
 .rainbow-border-glow.glow-playing {
     --glow-rotate-duration: 4s;
 }
 .rainbow-border-glow.glow-playing::after {
     opacity: 1;
-    animation: glow-pulse-playing 1.2s ease-in-out infinite;
+    /* brightness 跟随真实音频能量起伏；未捕获时回退默认 1.1 */
+    filter: brightness(var(--glow-energy, 1.1));
 }
 
 /* 三态：暂停慢转 + 缓慢呼吸 */
@@ -1726,7 +1777,7 @@ onUnmounted(() => {
     padding-right: 2px;
 }
 
-/* 暂停状态下的竖线（统一高度） */
+/* 频谱竖线：高度由真音频频谱数据通过 inline transform: scaleY() 驱动（rAF 平滑） */
 .audio-spectrum .bar {
     width: 2px;
     height: 13px;
@@ -1734,52 +1785,10 @@ onUnmounted(() => {
     border-radius: 3px;
     transform-origin: center;
     transform: scaleY(0.35);
-    transition: transform 0.4s ease;
     will-change: transform;
 }
 
-/* 播放状态：挂载动画 */
-.audio-spectrum.is-playing .bar {
-    /* ease-in-out 让动画两头慢中间快，更像真实的音乐律动 */
-    animation: spectrum-bounce 0.3s ease-in-out infinite alternate;
-}
-
-/* 给每根竖线设置不同的速度和延迟，打破规律感 */
-.audio-spectrum.is-playing .bar:nth-child(1) {
-    animation-duration: 0.31s;
-    animation-delay: 0.0s;
-}
-
-.audio-spectrum.is-playing .bar:nth-child(2) {
-    animation-duration: 0.43s;
-    animation-delay: 0.2s;
-}
-
-.audio-spectrum.is-playing .bar:nth-child(3) {
-    animation-duration: 0.29s;
-    animation-delay: 0.4s;
-}
-
-.audio-spectrum.is-playing .bar:nth-child(4) {
-    animation-duration: 0.48s;
-    animation-delay: 0.1s;
-}
-
-.audio-spectrum.is-playing .bar:nth-child(5) {
-    animation-duration: 0.18s;
-    animation-delay: 0.0s;
-}
-
-/* 律动动画关键帧：在 35% 高度和 95% 高度之间来回回弹 */
-@keyframes spectrum-bounce {
-    0% {
-        transform: scaleY(0.35);
-    }
-
-    100% {
-        transform: scaleY(0.95);
-    }
-}
+/* 律动动画关键帧已废弃：现在由 WASAPI 真音频数据驱动 scaleY */
 
 /* ====================
    原汁原味排版 + 剥离冲突动画修复版
